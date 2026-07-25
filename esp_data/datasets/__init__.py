@@ -11,11 +11,11 @@ from .audioset_strong import AudioSetStrong
 from .baringo_soundscapes import BaringoSoundscapes
 from .barkley_canyon import BarkleyCanyon, BarkleyCanyonDetection
 from .beans import Beans
-from .bengalese_finch import BengaleseFinch
 from .beans_pro import BeansPro
 from .beans_pro_multi_audio import BeansProMultiAudio
 from .beans_zero import BeansZero
 from .beans_zero_call_variants import BeansZeroCallVariants
+from .bengalese_finch import BengaleseFinch
 from .bengalese_finch_calls import BengaleseFinchCalls
 from .birdeep import Birdeep
 from .birdset import BirdSet
@@ -30,7 +30,6 @@ from .delphinid_whistles import DelphinidWhistles
 from .dinardo_dolphin_whistles import DinardoDolphinWhistles
 from .dori import DORI
 from .drasdic import DRASDIC
-from .madeira_odontocetes import MadeiraOdontocetes
 from .ecosoundset import EcoSoundSet
 from .esp_raincoast import ESPRaincoast
 from .f0_bioacoustic import F0Bioacoustic
@@ -46,8 +45,10 @@ from .insectset_459 import InsectSet459
 from .littleowl_id import LittleOwlId
 from .llm_text_distill import LLMTextDistill
 from .macaques_coo_calls import MacaquesCooCalls
+from .madeira_odontocetes import MadeiraOdontocetes
 from .mammalnet import MammalNet
 from .mammalps import MammAlps
+from .mediterranean_cetaceans import MediterraneanCetaceans
 from .mosquito_sound import MosquitoSound
 from .nabirds import NABirds
 from .ndege_zetu import NdegeZetu
@@ -156,6 +157,7 @@ __all__ = [
     "DelphinidWhistles",
     "DORI",
     "MadeiraOdontocetes",
+    "MediterraneanCetaceans",
     "DRASDIC",
     "EcoSoundSet",
     "Watkins",
