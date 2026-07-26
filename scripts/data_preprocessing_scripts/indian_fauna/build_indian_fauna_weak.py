@@ -27,6 +27,7 @@ from __future__ import annotations
 import argparse
 import ast
 import csv
+import random
 import sys
 from collections import defaultdict
 from concurrent.futures import ProcessPoolExecutor, as_completed
@@ -225,11 +226,16 @@ def build_manifests(
     rows = []
     for k, (state, d, orig_sr) in dur_by_key.items():
         sp = species_by_key.get(k, [])
+        # Single focal label for species_scientific classification: the one species
+        # for the 98.8% single-species files; a per-file seeded random pick for the
+        # rare multi-species case (deterministic/reproducible via the key seed).
+        canonical = random.Random(k).choice(sp) if sp else ""
         rows.append(
             {
                 "sound_name": f"{k}.wav",
                 "key": k,
                 "state": state,
+                "canonical_name": canonical,
                 "foreground_species": ", ".join(sp),  # comma-separated == species_list convention
                 "class": "; ".join(sorted(class_by_key.get(k, set()))),
                 "n_species": len(sp),
@@ -251,6 +257,7 @@ def build_manifests(
         "sound_name",
         "key",
         "state",
+        "canonical_name",
         "foreground_species",
         "class",
         "n_species",
