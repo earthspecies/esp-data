@@ -39,6 +39,9 @@ from .gibbon_solos import GibbonSolos
 from .hawaiian_birds import HawaiianBirds
 from .idle_oo_camera_traps import IDLEOOCameraTraps
 from .inaturalist import INaturalist
+from .indian_fauna_background import IndianFaunaBackground
+from .indian_fauna_strong import IndianFaunaStrong
+from .indian_fauna_weak import IndianFaunaWeak
 from .infant_marmosets_vox import InfantMarmosetsVox
 from .insect_sound import InsectSound
 from .insectset_459 import InsectSet459
@@ -135,6 +138,9 @@ __all__ = [
     "NdegeZetu",
     "NeWT",
     "IDLEOOCameraTraps",
+    "IndianFaunaStrong",
+    "IndianFaunaWeak",
+    "IndianFaunaBackground",
     "MammalNet",
     "AnimalKingdom",
     "MammAlps",
