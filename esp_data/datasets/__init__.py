@@ -33,6 +33,7 @@ from .drasdic import DRASDIC
 from .ecosoundset import EcoSoundSet
 from .esp_raincoast import ESPRaincoast
 from .f0_bioacoustic import F0Bioacoustic
+from .fasd13 import FASD13
 from .geladas import Geladas
 from .giant_otters import GiantOtters
 from .gibbon_solos import GibbonSolos
@@ -118,6 +119,7 @@ __all__ = [
     "VoxaboxenEvents",
     "ESPRaincoast",
     "F0Bioacoustic",
+    "FASD13",
     "Subsegmentation",
     "SubsegmentationSyntheticV9",
     "SuperbStarling",
