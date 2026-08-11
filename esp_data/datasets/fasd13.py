@@ -263,21 +263,47 @@ class FASD13(Dataset):
             sr = self.sample_rate
         return audio, sr
 
-    def _support_paths(self, row: dict[str, Any]) -> list[str]:
-        """Return the support-clip paths for the active sample rate, if any.
+    @staticmethod
+    def _as_path_list(raw: str | list[str] | None) -> list[str]:
+        """Coerce a support-path cell into a list of paths.
+
+        Accepts a list (the usual polars representation), a ``|``-joined string
+        (for manifests that flatten it), or ``None``.
 
         Returns
         -------
         list[str]
-            Empty when the row carries no support clips (single-audio mode).
         """
-        rate = self.sample_rate if self.sample_rate in self._support_paths_columns else 32000
-        raw = row.get(self._support_paths_columns[rate])
         if raw is None:
             return []
         if isinstance(raw, str):
             return [p for p in raw.split("|") if p]
         return [str(p) for p in raw if p]
+
+    def _support_paths(self, row: dict[str, Any]) -> tuple[list[str], int | None]:
+        """Return the support-clip paths and the rate they are stored at.
+
+        Prefers the mirror matching ``sample_rate`` but falls back to the other
+        one, resampling on read. The fallback matters: the chat-task evaluator
+        rewrites every dataset's ``sample_rate`` to the model's own, so a row
+        built for 32 kHz is routinely loaded by a 16 kHz model. Resolving only
+        the exact rate would find nothing, drop the row to single-audio mode,
+        and surface much later as an opaque embedding shape mismatch.
+
+        Returns
+        -------
+        tuple[list[str], int | None]
+            ``(paths, source_rate)``; ``([], None)`` in single-audio mode.
+        """
+        preferred = self.sample_rate if self.sample_rate in self._support_paths_columns else None
+        order = ([preferred] if preferred is not None else []) + [
+            rate for rate in self._support_paths_columns if rate != preferred
+        ]
+        for rate in order:
+            paths = self._as_path_list(row.get(self._support_paths_columns[rate]))
+            if paths:
+                return paths, rate
+        return [], None
 
     def _process(self, row: dict[str, Any]) -> dict[str, Any]:
         """Load audio and parse the selection table for one row.
@@ -308,10 +334,14 @@ class FASD13(Dataset):
             end=window_end if window_start is not None else None,
         )
 
-        support_paths = self._support_paths(row)
+        support_paths, support_rate = self._support_paths(row)
         if support_paths:
+            # Only treat the clips as pre-sampled when their mirror actually
+            # matches the target rate, otherwise _read must resample them.
+            supports_presampled = support_rate == self.sample_rate
             supports = [
-                self._read(anypath(self.data_root) / p, use_presampled)[0] for p in support_paths
+                self._read(anypath(self.data_root) / p, supports_presampled)[0]
+                for p in support_paths
             ]
             row["audios"] = [*supports, query]
             row["audio_paths"] = [*support_paths, str(audio_path)]
