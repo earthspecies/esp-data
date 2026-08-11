@@ -106,6 +106,7 @@ Two caveats worth knowing:
   events in 350 s), the first 5 events fall within a fraction of a second of
   each other, so the 5 clips overlap almost completely. This is inherent to
   "the first N events" and matches what DRASDIC itself sees.
+- **Support region bound.** Clips are bounded by the end of the Nth event, never by the recording length, so they can never contain query-region audio (the earlier unbounded version leaked 442 query events into 250 of 545 clips). Where the 5-event prefix is shorter than 10 s the whole prefix is used, giving a shorter clip.
 - **`UNK` inside support clips.** Clips keep contiguous audio, so an `UNK`
   event can be audible but is deliberately absent from `event_times`.
   `n_unk_in_clip` flags these. (DRASDIC instead excises `UNK` samples, which

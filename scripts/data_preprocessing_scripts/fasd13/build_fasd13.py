@@ -730,21 +730,29 @@ def build_manifests(root: Path, durations_csv: Path, out_dir: Path, codes: list[
 
 
 # ── support clips ───────────────────────────────────────────────────────────
-def _support_window(event_start: float, duration: float) -> tuple[float, float]:
+def _support_window(event_start: float, support_end: float) -> tuple[float, float]:
     """Return the ``SUPPORT_CLIP_SEC`` window placing an event 1/3 of the way in.
 
-    Clamped to the recording; if the recording is shorter than the clip, the
-    whole recording is used.
+    Bounded by ``support_end`` -- the end of the Nth event -- **not** by the
+    recording length. That bound is the whole point: DRASDIC draws its support
+    from ``audio[:support_endsample]`` and never sees a sample beyond it, so a
+    clip that ran past it would hand us audio the reference system is not
+    allowed, and (because the clip's event list is rendered from whatever falls
+    inside it) would print query-region onsets straight into the prompt.
+
+    If the support region is shorter than a clip, the whole region is used --
+    a shorter clip rather than DRASDIC's cyclic padding, which would fabricate
+    repeated audio.
 
     Returns
     -------
     tuple[float, float]
-        ``(window_start, window_end)`` in seconds.
+        ``(window_start, window_end)`` in seconds, inside ``[0, support_end]``.
     """
-    if duration <= SUPPORT_CLIP_SEC:
-        return 0.0, duration
+    if support_end <= SUPPORT_CLIP_SEC:
+        return 0.0, support_end
     start = event_start - SUPPORT_CLIP_SEC * SUPPORT_LEFT_FRACTION
-    start = min(max(0.0, start), duration - SUPPORT_CLIP_SEC)
+    start = min(max(0.0, start), support_end - SUPPORT_CLIP_SEC)
     return start, start + SUPPORT_CLIP_SEC
 
 
@@ -772,40 +780,54 @@ def _event_times_str(df: pd.DataFrame, win_start: float, win_end: float) -> str:
     return ", ".join(parts)
 
 
-def _support_one(args: tuple[str, str, str, float, list[float]]) -> tuple[list[dict], str]:
+def _support_one(args: tuple[str, str, str, str, float, list[float]]) -> tuple[list[dict], str]:
     """Cut the support clips for one recording at both sample rates.
+
+    ``audio_root`` may be local or a ``gs://`` mirror root; only the needed
+    slice is read, so this can be re-run against GCS without re-staging the
+    ~50 GB of mirrors locally.
 
     Parameters
     ----------
     args : tuple
-        ``(anno_fp, mirrors_root, rel, duration, shot_starts)`` where
-        ``shot_starts`` holds the start time of each shot event.
+        ``(anno_fp, audio_root, out_root, rel, support_end, shot_starts)``
+        where ``shot_starts`` holds the start time of each shot event and
+        ``support_end`` is the end of the Nth event.
 
     Returns
     -------
     tuple[list[dict], str]
         ``(support_rows, status)``.
+
+    Raises
+    ------
+    RuntimeError
+        If a mirror does not carry its expected sample rate.
     """
     import numpy as np
     import soundfile as sf
 
-    anno_fp, mirrors_root, rel, duration, shot_starts = args
+    from esp_data.io import anypath, read_audio
+
+    anno_fp, audio_root, out_root, rel, support_end, shot_starts = args
     code, stem = rel.split("/", 1)
     try:
         df = _read_events(Path(anno_fp))
         rows = []
         for shot, ev_start in enumerate(shot_starts, start=1):
-            win_start, win_end = _support_window(float(ev_start), duration)
+            win_start, win_end = _support_window(float(ev_start), float(support_end))
             paths = {}
             for tgt in (16000, 32000):
-                src = Path(mirrors_root) / f"audio_{tgt // 1000}k" / f"{rel}.wav"
-                i0 = int(round(win_start * tgt))
-                i1 = int(round(win_end * tgt))
-                audio, _ = sf.read(src, start=i0, stop=i1, dtype="float32", always_2d=False)
+                src = anypath(audio_root) / f"audio_{tgt // 1000}k" / f"{rel}.wav"
+                audio, sr = read_audio(src, start_time=win_start, end_time=win_end)
+                if audio.ndim > 1:
+                    audio = audio.mean(axis=-1 if audio.shape[-1] <= 8 else 0)
+                if sr != tgt:
+                    raise RuntimeError(f"{src}: expected {tgt} Hz mirror, got {sr}")
                 out_rel = f"{code}/{stem}__shot{shot}.wav"
-                out = Path(mirrors_root) / f"support_{tgt // 1000}k" / out_rel
+                out = Path(out_root) / f"support_{tgt // 1000}k" / out_rel
                 out.parent.mkdir(parents=True, exist_ok=True)
-                sf.write(out, np.clip(audio, -1.0, 1.0), tgt, subtype="PCM_16")
+                sf.write(out, np.clip(audio, -1.0, 1.0).astype("float32"), tgt, subtype="PCM_16")
                 paths[tgt] = f"support_{tgt // 1000}k/{out_rel}"
             in_win = df[(df["Endtime"] > win_start) & (df["Starttime"] < win_end)]
             rows.append(
@@ -828,7 +850,9 @@ def _support_one(args: tuple[str, str, str, float, list[float]]) -> tuple[list[d
         return [], f"ERROR: {exc}"
 
 
-def build_support(root: Path, mirrors: Path, manifest_dir: Path, workers: int) -> None:
+def build_support(
+    root: Path, mirrors: str, out_root: Path, manifest_dir: Path, workers: int
+) -> None:
     """Materialise the ``MAX_SHOTS`` support clips per recording, at both rates.
 
     Support clip ``k`` is derived only from event ``k``, so an N-shot episode
@@ -838,9 +862,12 @@ def build_support(root: Path, mirrors: Path, manifest_dir: Path, workers: int) -
     ----------
     root : Path
         Extracted tree root holding ``<CODE>/`` (for the annotation CSVs).
-    mirrors : Path
-        Root holding ``audio_16k/`` / ``audio_32k/``; support clips are written
-        alongside as ``support_16k/`` / ``support_32k/``.
+    mirrors : str
+        Root holding ``audio_16k/`` / ``audio_32k/``. May be a ``gs://`` URI:
+        only the needed slice of each recording is read, so support clips can
+        be rebuilt without re-staging the mirrors locally.
+    out_root : Path
+        Local destination for ``support_16k/`` / ``support_32k/``.
     manifest_dir : Path
         Directory holding ``fasd13_all.csv``; ``fasd13_support.csv`` is written here.
     workers : int
@@ -861,8 +888,17 @@ def build_support(root: Path, mirrors: Path, manifest_dir: Path, workers: int) -
         starts = [float(v) for v in known["Starttime"].tolist()[:MAX_SHOTS]]
         if len(starts) < MAX_SHOTS:
             print(f"  !! {code}/{stem}: only {len(starts)} usable events", flush=True)
+        shot_ends = [float(t) for t in str(r["shot_end_times"]).split(",") if t]
+        support_end = shot_ends[MAX_SHOTS - 1] if len(shot_ends) >= MAX_SHOTS else shot_ends[-1]
         jobs.append(
-            (str(anno_fp), str(mirrors), f"{code}/{stem}", float(r["audio_duration"]), starts)
+            (
+                str(anno_fp),
+                str(mirrors),
+                str(out_root),
+                f"{code}/{stem}",
+                support_end,
+                starts,
+            )
         )
 
     print(f"cutting support clips for {len(jobs)} recordings ...", flush=True)
@@ -881,6 +917,28 @@ def build_support(root: Path, mirrors: Path, manifest_dir: Path, workers: int) -
     out = manifest_dir / "fasd13_support.csv"
     df_sup.to_csv(out, index=False)
     empty = int((df_sup["event_times"] == "").sum())
+    # Hard guard: no support clip may reach past the Nth event. Crossing that
+    # line hands us audio DRASDIC is not allowed and prints query-region onsets
+    # into the prompt, so it must fail the build rather than ship quietly.
+    cutoff = {
+        (str(r["subdataset"]), str(r["sound_name"])): float(
+            str(r["shot_end_times"]).split(",")[MAX_SHOTS - 1]
+        )
+        for _, r in df_all.iterrows()
+        if len(str(r["shot_end_times"]).split(",")) >= MAX_SHOTS
+    }
+    over = [
+        f"{r['subdataset']}/{r['sound_name']}#{r['shot_index']} "
+        f"ends {r['window_end_sec']:.2f} > {cutoff[(r['subdataset'], r['sound_name'])]:.2f}"
+        for _, r in df_sup.iterrows()
+        if (r["subdataset"], r["sound_name"]) in cutoff
+        and r["window_end_sec"] > cutoff[(r["subdataset"], r["sound_name"])] + 1e-6
+    ]
+    if over:
+        raise SystemExit(
+            f"{len(over)} support clip(s) extend past the {MAX_SHOTS}th event "
+            f"(support-region leakage); first few: {over[:5]}"
+        )
     print(
         f"  {len(df_sup)} support clips ({df_sup['clip_duration'].sum() / 60:.1f} min), "
         f"{int(df_sup['n_unk_in_clip'].sum())} clips-with-UNK events, "
@@ -914,7 +972,8 @@ def main() -> None:
 
     ps = sub.add_parser("support")
     ps.add_argument("--root", type=Path, required=True)
-    ps.add_argument("--mirrors", type=Path, required=True)
+    ps.add_argument("--mirrors", required=True, help="local dir or gs:// mirror root")
+    ps.add_argument("--out-root", type=Path, required=True)
     ps.add_argument("--manifest-dir", type=Path, required=True)
     ps.add_argument("--workers", type=int, default=16)
 
@@ -926,7 +985,7 @@ def main() -> None:
     elif args.stage == "manifests":
         build_manifests(args.root, args.durations_csv, args.out_dir, _codes(args.codes))
     else:
-        build_support(args.root, args.mirrors, args.manifest_dir, args.workers)
+        build_support(args.root, args.mirrors, args.out_root, args.manifest_dir, args.workers)
 
 
 if __name__ == "__main__":

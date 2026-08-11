@@ -56,7 +56,8 @@ uv run python "${SCRIPT}" manifests \
 # 4. Few-shot support clips (5 per recording, both rates) + fasd13_support.csv.
 echo "=== 4. support clips ==="
 uv run python "${SCRIPT}" support \
-    --root "${WORK}" --mirrors "${MIRRORS}" --manifest-dir "${MANIFESTS}" --workers "${WORKERS}"
+    --root "${WORK}" --mirrors "${MIRRORS}" --out-root "${MIRRORS}" \
+    --manifest-dir "${MANIFESTS}" --workers "${WORKERS}"
 
 # 5. Upload. Raw originals + annotations are kept for provenance.
 echo "=== 5. upload ==="
