@@ -158,6 +158,80 @@ def test_check_selection_table(ds: FASD13):
         assert st["End Time (s)"].max() <= duration + 1e-3, f"[{idx}] event past end of audio"
 
 
+def _windowed(ds: FASD13, idx: int, start: float, end: float) -> dict:
+    """Process one row as if a caller had attached window columns to it."""
+    row = dict(ds._data[idx])
+    row["window_start_sec"], row["window_end_sec"] = start, end
+    return ds._process(row)
+
+
+def test_windowed_read_returns_only_the_window(ds: FASD13):
+    """A windowed row should read just that segment, not the whole recording."""
+    full = ds[0]["audio"]
+    item = _windowed(ds, 0, 10.0, 20.0)
+
+    assert item["sample_rate"] == 32000
+    assert abs(item["audio"].size / 32000 - 10.0) < 0.05, "window is not 10 s of audio"
+    assert item["audio"].size < full.size, "windowed read returned the whole recording"
+    np.testing.assert_allclose(item["audio"], full[10 * 32000 : 20 * 32000], atol=1e-6)
+
+
+def test_windowed_selection_table_is_window_relative(ds: FASD13):
+    """Events should be filtered to the window and shifted onto the returned audio."""
+    full_st = ds[0]["selection_table"]
+    # Pick an event far enough in that a 2 s lead-in stays inside the recording.
+    event = full_st[full_st["Begin Time (s)"] >= 2.0].iloc[0]
+    start = float(event["Begin Time (s)"]) - 2.0
+    end = start + 6.0
+
+    st = _windowed(ds, 0, start, end)["selection_table"]
+
+    assert len(st) > 0, "the window was built around an event, so it cannot be empty"
+    assert (st["Begin Time (s)"] >= 0).all(), "event begins before the window"
+    assert (st["End Time (s)"] <= 6.0 + 1e-6).all(), "event ends after the window"
+
+    # The event the window was built around should sit ~2 s in, and keep its identity.
+    kept = st[st["event_index"] == event["event_index"]]
+    assert len(kept) == 1, "the target event was dropped from its own window"
+    assert abs(float(kept.iloc[0]["Begin Time (s)"]) - 2.0) < 1e-6
+
+    # Events outside the window are gone.
+    assert len(st) < len(full_st), "no events were filtered out of the window"
+
+
+def test_unwindowed_selection_table_stays_absolute(ds: FASD13):
+    """Without window columns the full table is returned with absolute times."""
+    item = ds[0]
+    st = item["selection_table"]
+
+    assert len(st) == int(ds._data[0]["n_events"]), "unwindowed read dropped events"
+    duration = item["audio"].size / item["sample_rate"]
+    assert st["End Time (s)"].max() <= duration + 1e-3
+    # Times span the recording rather than a window rebased onto zero.
+    assert st["End Time (s)"].max() > 10.0
+
+
+def test_windowed_read_on_long_recording():
+    """
+    Windowed reads must work on the pathological files, not just the small ones.
+
+    HG holds 8-hour recordings: ~3.7 GB of float32 apiece at 32 kHz. Cutting an
+    N-shot support clip or chunking a query region downstream is only possible
+    because the segment is streamed rather than downloaded whole. If this test
+    starts taking minutes or exhausting memory, the windowed path has regressed
+    to a full-file read.
+    """
+    ds_hg = FASD13(split="HG", sample_rate=32000, backend="pandas")
+    row = dict(ds_hg._data[0])
+    assert row["audio_duration"] > 3600, "expected HG to hold multi-hour recordings"
+
+    row["window_start_sec"], row["window_end_sec"] = 100.0, 110.0
+    item = ds_hg._process(row)
+
+    assert abs(item["audio"].size / 32000 - 10.0) < 0.05
+    assert item["audio"].dtype == np.float32
+
+
 def test_n_shot_columns(ds_all: FASD13):
     """Every recording should carry the metadata needed to build an N-shot episode."""
     rows = ds_all._data.unwrap

@@ -81,7 +81,23 @@ class FASD13(Dataset):
     remainder, which is the only region scored. Each row carries
     `n_shots_available` and `shot_end_times` (the end times of the first five
     non-`UNK` events), so any episode with N <= 5 can be derived from the
-    selection table without re-reading the annotations.
+    selection table without re-reading the annotations. Together with the
+    windowed reads described below, that is everything an episode builder
+    needs, so episode construction itself stays outside this class.
+
+    Windowed reads
+    --------------
+    A row carrying `window_start_sec` and `window_end_sec` reads only that
+    segment, streamed from cloud storage rather than downloaded whole, and its
+    selection table is re-based onto the window: non-overlapping events are
+    dropped and the rest are shifted and clipped so their times line up with
+    the returned audio. `event_index` is preserved, so a caller can still tell
+    which of the recording's events a row refers to.
+
+    This is what makes the benchmark usable without loading whole recordings.
+    Several sub-datasets ship 8-hour files -- one `HG` item is ~3.7 GB of
+    float32 at 32 kHz -- so cutting an N-shot support clip or chunking a query
+    region has to happen at read time.
 
     Pre-resampled Audio
     -------------------
@@ -220,8 +236,47 @@ class FASD13(Dataset):
             )
         return len(self._data)
 
+    @staticmethod
+    def _window_selection_table(
+        st: pd.DataFrame, window_start: float, duration: float
+    ) -> pd.DataFrame:
+        """Re-base a recording-absolute selection table onto a windowed read.
+
+        Events that do not overlap the window are dropped; the rest are shifted
+        so their times are relative to the start of the returned audio, and
+        clipped to it. `event_index` is left untouched so a caller can still
+        tell which of the recording's events a row refers to, which is what the
+        N-shot protocol needs.
+
+        Parameters
+        ----------
+        st : pd.DataFrame
+            Selection table with recording-absolute `Begin Time (s)` and
+            `End Time (s)`.
+        window_start : float
+            Start of the window, in seconds from the start of the recording.
+        duration : float
+            Duration of the audio actually returned, in seconds. Used instead
+            of the requested window end so that a window running past the end
+            of the file is handled correctly.
+
+        Returns
+        -------
+        pd.DataFrame
+            The windowed selection table, with times relative to the window.
+        """
+        window_end = window_start + duration
+        st = st[(st["End Time (s)"] > window_start) & (st["Begin Time (s)"] < window_end)].copy()
+        st["Begin Time (s)"] = (st["Begin Time (s)"] - window_start).clip(lower=0.0)
+        st["End Time (s)"] = (st["End Time (s)"] - window_start).clip(upper=duration)
+        return st
+
     def _process(self, row: dict[str, Any]) -> dict[str, Any]:
         """Process a single row of the dataset.
+
+        When the row carries `window_start_sec` and `window_end_sec`, only that
+        segment is read and the selection table is re-based onto it. See the
+        class docstring.
 
         Parameters
         ----------
@@ -243,7 +298,15 @@ class FASD13(Dataset):
         if not use_presampled:
             audio_path = anypath(self.data_root) / row[self._originals_path_column]
 
-        audio, sr = read_audio(audio_path)
+        window_start = row.get("window_start_sec")
+        window_end = row.get("window_end_sec")
+
+        if window_start is not None and window_end is not None:
+            audio, sr = read_audio(
+                audio_path, start_time=float(window_start), end_time=float(window_end)
+            )
+        else:
+            audio, sr = read_audio(audio_path)
         audio = audio_stereo_to_mono(audio, mono_method="average").astype(np.float32)
 
         if not use_presampled and self.sample_rate is not None and sr != self.sample_rate:
@@ -257,6 +320,8 @@ class FASD13(Dataset):
             sr = self.sample_rate
 
         st = pd.read_csv(StringIO(row["selection_table"]), sep="\t")
+        if window_start is not None and window_end is not None:
+            st = self._window_selection_table(st, float(window_start), len(audio) / float(sr))
 
         row["audio"] = audio
         row["sample_rate"] = sr
