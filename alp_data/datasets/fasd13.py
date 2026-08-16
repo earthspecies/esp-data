@@ -320,8 +320,15 @@ class FASD13(Dataset):
             sr = self.sample_rate
 
         st = pd.read_csv(StringIO(row["selection_table"]), sep="\t")
+        audio_duration = len(audio) / float(sr)
         if window_start is not None and window_end is not None:
-            st = self._window_selection_table(st, float(window_start), len(audio) / float(sr))
+            st = self._window_selection_table(st, float(window_start), audio_duration)
+        else:
+            # Same guard WABAD and DCLDE2026 apply: drop events that begin past
+            # the end of the audio. A no-op on the shipped manifests -- no event
+            # in the benchmark overhangs its recording -- but it keeps the
+            # unwindowed path identical to its siblings.
+            st = st[st["Begin Time (s)"] < audio_duration].copy()
 
         row["audio"] = audio
         row["sample_rate"] = sr
