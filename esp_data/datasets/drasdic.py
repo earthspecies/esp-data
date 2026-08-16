@@ -6,8 +6,17 @@ Provides access to synthetic multi-audio tasks where each example contains
 
 Available splits
 ----------------
-- ``sed_fewshot``: ~50k few-shot sound event detection examples (2-4
-  support clips + 1 query clip, predict target timestamps).
+- ``sed_fewshot``: ~50k few-shot sound event detection examples (1-5
+  support clips + 1 query clip, predict target timestamps). The 32 kHz
+  twins are ``sed_fewshot_32k`` (100k, positives only) and
+  ``sed_fewshot_32k_none`` (100k, 20.2% ``"None"`` true negatives).
+- ``sed_fewshot_32k_combined``: 200k few-shot SED scenes, 15.0%
+  ``"None"``. Prompt is character-identical to the two corpora above
+  (``audio_synth/fewshot_sed``, query clip last), but the scenes carry
+  the newer synthesis features: support distractors in ~91% of scenes,
+  20.2% wavcaps sources, discrete GMM weighting, and no species>=4
+  filter. Ships a per-clip ``.txt`` selection table beside every WAV and
+  a ``provenance/`` JSON per scene.
 - ``call_type_all``: ~100k call-type tasks across 5 sub-tasks.
 - ``call_type_multiple_choice``: ~25k 4-choice call-type matching.
 - ``call_type_binary``: ~25k binary call-type detection (Yes/No).
@@ -69,6 +78,10 @@ _V1_ROOT = "gs://foundation-model-data/synthetic"
 
 _SPLIT_DIRS: dict[str, str] = {
     "sed_fewshot": f"{_BASE_ROOT}/synthetic_sed_fewshot_16k",
+    "sed_fewshot_32k": f"{_BASE_ROOT}/synthetic_sed_fewshot_32k",
+    # 20% "None" (true-negative) twin, disjoint seeds (ids offset by 1,000,000)
+    "sed_fewshot_32k_none": f"{_BASE_ROOT}/synthetic_sed_fewshot_32k_none",
+    "sed_fewshot_32k_combined": f"{_BASE_ROOT}/synthetic_sed_fewshot_32k_combined",
     "call_type_all": f"{_BASE_ROOT}/synthetic_call_type_tasks_16k",
     "call_type_all_v1": f"{_V1_ROOT}/synthetic_call_type_tasks_16k_v1",
     "call_type_all_v2_16k": f"{_BASE_ROOT}/synthetic_call_type_tasks_16k_v2",
@@ -212,6 +225,11 @@ class DRASDIC(Dataset):
         owner="david",
         split_paths={
             "sed_fewshot": f"{_SPLIT_DIRS['sed_fewshot']}/conversations.jsonl",
+            "sed_fewshot_32k": f"{_SPLIT_DIRS['sed_fewshot_32k']}/conversations.jsonl",
+            "sed_fewshot_32k_none": f"{_SPLIT_DIRS['sed_fewshot_32k_none']}/conversations.jsonl",
+            "sed_fewshot_32k_combined": (
+                f"{_SPLIT_DIRS['sed_fewshot_32k_combined']}/conversations.jsonl"
+            ),
             "call_type_all": f"{_SPLIT_DIRS['call_type_all']}/conversations.jsonl",
             "fewshot_detection": f"{_SPLIT_DIRS['fewshot_detection']}/conversations.jsonl",
             "feature_conditioned_detection": (
