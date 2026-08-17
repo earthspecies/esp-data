@@ -101,16 +101,41 @@ class FASD13(Dataset):
 
     Pre-resampled Audio
     -------------------
-    Pre-resampled mono audio is available at 16 kHz and 32 kHz. When
-    `sample_rate` matches one of these rates, the pre-resampled files are
-    loaded directly (no on-the-fly resampling). Native rates range from 16 kHz
-    to 96 kHz and some sources are stereo, so the mirrors are the only
-    mono-normalised view; 32 kHz is the default and the recommended rate.
+    Three views of every recording are stored. `audio_fp` is the original, as
+    Zenodo ships it, at its native rate and channel count; `16khz_path` and
+    `32khz_path` are pre-resampled mono mirrors. When `sample_rate` is 16000 or
+    32000 the matching mirror is read directly with no on-the-fly resampling.
+    Any other rate -- including `None`, which returns the audio at its native
+    rate -- reads the original, resampling from it with librosa's `kaiser_best`
+    method where needed. 32 kHz is the default.
 
-    Native-rate audio is not mirrored. The `audio_fp` column points at the
-    32 kHz mirror, so any other target rate is resampled from 32 kHz on the fly
-    using librosa's `kaiser_best` method, and the `native_sample_rate` column
-    is informational only.
+    Native rates span 8 kHz to 187.5 kHz. What the mirrors cost you, measured
+    rather than assumed:
+
+    - Very little bandwidth, despite the rates. `CC` (46.875 / 187.5 kHz),
+      `KD` (96 kHz) and `MS` (44.1 kHz) can represent content above the
+      mirrors' Nyquist, but at annotated events under 0.3 % of their energy
+      sits above 16 kHz -- 0.00 % for the single 187.5 kHz `CC` file. For
+      detection the 32 kHz mirror is a faithful view of every sub-dataset.
+    - `GS` (8 kHz) and `HG` (9.6 kHz) are *upsampled* into the mirrors, and
+      they are 77 % of the benchmark by duration, so a 32 kHz read of most of
+      FASD13 carries nothing above ~4-5 kHz. Nothing is lost by it, but do not
+      mistake the rate for bandwidth.
+    - `AS` and `HG` are stereo at source (21 recordings, 72.2 h). Reads are
+      mono-averaged whatever the view, as in WABAD; the originals keep their
+      channels for anyone who needs them.
+
+    So read the originals for provenance, exact source bytes and channels --
+    not in the expectation of extra bandwidth.
+
+    Every `HA` recording is a FLAC bitstream carrying a `.wav` extension. Two
+    of them (`Hawaii_UHH_494_S04_20190418_203000.wav` and
+    `Hawaii_UHH_627_S02_20220323_100400.wav`) hold frames libsndfile cannot
+    decode, so their originals are published transcoded to plain PCM by ffmpeg,
+    which reads them in full. `HA` is 32 kHz mono at source, so this is a
+    container change only: both transcodes are bit-identical to the published
+    32 kHz mirror. The files exactly as Zenodo ships them are kept under
+    `raw/HA/` for provenance.
 
     Licensing
     ---------
@@ -128,7 +153,7 @@ class FASD13(Dataset):
 
     info = DatasetInfo(
         name="fasd13",
-        owner="david",
+        owner="david; benjamin",
         split_paths={
             "all": f"{_RAW_ROOT}/fasd13_all.csv",
             **{code: f"{_RAW_ROOT}/fasd13_{code}.csv" for code in SUBDATASET_CODES},

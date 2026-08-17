@@ -670,7 +670,11 @@ def build_manifests(root: Path, durations_csv: Path, out_dir: Path, codes: list[
                     "subdataset_name": sd["name"],
                     "split": code,
                     "audio_duration": round(dur, 3),
-                    "audio_fp": f"audio_32k/{rel}.wav",
+                    # audio_fp is the originals pointer, as it is in WABAD: the
+                    # file exactly as Zenodo ships it, at its native rate and
+                    # channel count. The mirrors below are the mono-normalised
+                    # convenience views.
+                    "audio_fp": f"audio_native/{rel}.wav",
                     "16khz_path": f"audio_16k/{rel}.wav",
                     "32khz_path": f"audio_32k/{rel}.wav",
                     "native_sample_rate": native_sr,

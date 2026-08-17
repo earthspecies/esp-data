@@ -27,7 +27,7 @@ EXPECTED_LEN_AS = 12
 EXPECTED_FIRST_AS_AUDIO_SHA256 = (
     "77aadf4a911c9b58073a4fe13d98a5075db3a18241ed6d0345886aef92816fe6"
 )
-AS_ANNOTATIONS_SHA256 = "a446f5dc9d21b4316950e867862cc64dbd32e8a6f757f770ddcb7b1074a167c8"
+AS_ANNOTATIONS_SHA256 = "530ad2465f5d1b1c1677885bca516a7b086f267784625f34788f53ba785a3e30"
 
 SELECTION_TABLE_COLUMNS = [
     "Selection",
@@ -117,6 +117,45 @@ def test_load_presampled_16khz():
     # Same recording, half the rate: exactly half the samples.
     ds_32 = FASD13(split="AS", sample_rate=32000, backend="pandas")
     assert ds_32[0]["audio"].size == 2 * audio_16.size
+
+
+def test_audio_fp_points_at_the_originals(ds_all: FASD13):
+    """`audio_fp` must be the native recording, not one of the mirrors."""
+    rows = ds_all._data.unwrap
+    assert rows["audio_fp"].str.startswith("audio_native/").all()
+    assert rows["16khz_path"].str.startswith("audio_16k/").all()
+    assert rows["32khz_path"].str.startswith("audio_32k/").all()
+    # All three views must name the same recording.
+    stems = rows["audio_fp"].str.replace("audio_native/", "", regex=False)
+    assert stems.equals(rows["32khz_path"].str.replace("audio_32k/", "", regex=False))
+
+
+def test_native_read_returns_native_rate():
+    """`sample_rate=None` should return the recording at its own rate."""
+    ds_native = FASD13(split="AS", sample_rate=None, backend="pandas")
+    row = ds_native._data[0]
+    item = ds_native[0]
+    assert item["sample_rate"] == int(row["native_sample_rate"]) == 22050
+    assert item["audio"].dtype == np.float32
+    assert abs(item["audio"].size / item["sample_rate"] - float(row["audio_duration"])) < 0.05
+
+
+def test_ha_flac_in_wav_originals_are_readable():
+    """
+    Every HA original must decode in full.
+
+    HA ships FLAC bitstreams under a .wav extension, and two of them hold
+    frames libsndfile rejects. Those two are published transcoded to plain PCM,
+    bit-identical to the 32 kHz mirror. If the transcode is ever lost, these
+    reads raise LibsndfileError again.
+    """
+    ds_native = FASD13(split="HA", sample_rate=None, backend="pandas")
+    for idx in (7, 11):
+        row = ds_native._data[idx]
+        item = ds_native[idx]
+        assert item["sample_rate"] == 32000
+        assert abs(item["audio"].size / 32000 - float(row["audio_duration"])) < 0.05
+        assert not np.all(item["audio"] == 0)
 
 
 def test_backends_agree(ds: FASD13):
