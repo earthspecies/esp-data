@@ -10,7 +10,7 @@ from pathlib import Path
 import pytest
 from fsspec.implementations.http import HTTPFileSystem
 
-from alp_data.io import anypath, filesystem_from_path
+from alp_data.io import anypath, filesystem, filesystem_from_path
 
 
 def test_anypath_local_path_with_file_operations():
@@ -67,3 +67,20 @@ def test_filesystem_from_path():
     https_path = anypath("https://example.com/datasets/file.json")
     fs = filesystem_from_path(https_path)
     assert isinstance(fs, HTTPFileSystem)
+
+    # Test with plain HTTP path
+    http_path = anypath("http://example.com/datasets/file.json")
+    fs = filesystem_from_path(http_path)
+    assert isinstance(fs, HTTPFileSystem)
+
+
+@pytest.mark.parametrize("protocol", ["http", "https"])
+def test_filesystem_http_protocols(protocol):
+    """Both HTTP(S) protocol strings map to an HTTPFileSystem."""
+    assert isinstance(filesystem(protocol), HTTPFileSystem)
+
+
+def test_filesystem_unknown_protocol():
+    """An unsupported protocol raises with the supported backends listed."""
+    with pytest.raises(ValueError, match="Unknown backend: ftp"):
+        filesystem("ftp")

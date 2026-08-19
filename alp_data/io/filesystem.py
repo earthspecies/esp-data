@@ -14,21 +14,26 @@ from s3fs import S3FileSystem
 
 from alp_data.utils import read_gcp_secret
 
-from .paths import AnyPathT, PureGSPath, PureHTTPSPath, PureR2Path, anypath
+from .paths import AnyPathT, PureGSPath, PureHTTPPath, PureHTTPSPath, PureR2Path, anypath
 
 logger = logging.getLogger("alp_data")
 
 
 @cache
 def filesystem(
-    protocol: Literal["gcs", "gs", "r2", "local", "https"] = "local",
+    protocol: Literal["gcs", "gs", "r2", "local", "http", "https"] = "local",
     **kwargs: dict,
 ) -> GCSFileSystem | S3FileSystem | LocalFileSystem | HTTPFileSystem:
     """Initializes and returns a cached filesystem instance.
 
     This function acts as a factory for creating filesystem objects based on the
     specified protocol. It supports Google Cloud Storage ('gcs', 'gs'),
-    Cloudflare R2 ('r2'), and the local filesystem ('local').
+    Cloudflare R2 ('r2'), plain HTTP(S) endpoints ('http', 'https'), and the local
+    filesystem ('local').
+
+    Both 'http' and 'https' return an `HTTPFileSystem`; fsspec registers a single
+    implementation for the two schemes, so the scheme is carried by the URL passed
+    to the filesystem rather than by the filesystem object itself.
 
     For the 'r2' protocol, it automatically retrieves the necessary credentials
     (access key ID, secret access key, endpoint URL) from GCP Secret Manager.
@@ -38,9 +43,9 @@ def filesystem(
 
     Parameters
     ----------
-        protocol: Literal["gcs", "gs", "r2", "https", "local"]
+        protocol: Literal["gcs", "gs", "r2", "http", "https", "local"]
             The type of filesystem to initialize. Defaults to "local".
-            Supported values are "gcs", "gs", "r2", "https", "local".
+            Supported values are "gcs", "gs", "r2", "http", "https", "local".
         **kwargs: dict
             Additional keyword parameters to pass directly to the
             underlying filesystem constructor (e.g., GCSFileSystem, S3FileSystem).
@@ -77,10 +82,12 @@ def filesystem(
         )
     elif protocol == "local":
         return fsspec.filesystem("local", **kwargs)
-    elif protocol == "https":
+    elif protocol in ["http", "https"]:
         return fsspec.filesystem("http", **kwargs)
     else:
-        raise ValueError(f"Unknown backend: {protocol}. Supported backends are: gcs, r2.")
+        raise ValueError(
+            f"Unknown backend: {protocol}. Supported backends are: gcs, gs, r2, http, https, local."
+        )
 
 
 def filesystem_from_path(
@@ -89,8 +96,9 @@ def filesystem_from_path(
     """Determines and returns the appropriate cached filesystem based on the path.
 
     Uses the `anypath` utility to normalize the input path and identify its
-    protocol (local, GCS, R2). It then calls the `filesystem` factory function
-    to retrieve the corresponding cached fsspec-compatible filesystem instance.
+    protocol (local, GCS, R2, HTTP, HTTPS). It then calls the `filesystem` factory
+    function to retrieve the corresponding cached fsspec-compatible filesystem
+    instance.
 
     Parameters
     ----------
@@ -117,5 +125,7 @@ def filesystem_from_path(
         return filesystem("r2")
     elif isinstance(path, PureHTTPSPath):
         return filesystem("https")
+    elif isinstance(path, PureHTTPPath):
+        return filesystem("http")
     else:
         return filesystem("local")

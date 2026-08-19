@@ -758,9 +758,22 @@ class PureHTTPSPath(PureCloudPath):
     __slots__ = ()
 
 
+class PureHTTPPath(PureCloudPath):
+    """Plain HTTP path.
+
+    Kept separate from `PureHTTPSPath` because `cloud_prefix` holds a single scheme
+    and the scheme must survive round-tripping to `str`: the underlying
+    `HTTPFileSystem` is handed the full URL, so rewriting `http://` as `https://`
+    (or the reverse) would change which endpoint is contacted.
+    """
+
+    cloud_prefix = "http://"
+    __slots__ = ()
+
+
 # TODO (milad) Python 3.12 introduces `type`. It will probably deprecate TypeAlias at
 # some point. We should use that instead when 3.12 is not too new anymore.
-AnyPathT: TypeAlias = Path | PureGSPath | PureR2Path | PureS3Path | PureHTTPSPath
+AnyPathT: TypeAlias = Path | PureGSPath | PureR2Path | PureS3Path | PureHTTPSPath | PureHTTPPath
 
 
 def anypath(path: str | AnyPathT) -> AnyPathT:
@@ -781,8 +794,9 @@ def anypath(path: str | AnyPathT) -> AnyPathT:
     -------
     AnyPathT
         An instance of `Path` for local paths, `PureGSPath` for Google Cloud Storage
-        paths, or `PureR2Path` for Cloudflare R2 paths (including those starting with
-        "s3://"), and `PureHTTPSPath` for HTTPS paths.
+        paths, `PureR2Path` for Cloudflare R2 paths (including those starting with
+        "s3://"), `PureHTTPSPath` for "https://" paths, and `PureHTTPPath` for
+        "http://" paths.
 
 
     Examples
@@ -811,5 +825,7 @@ def anypath(path: str | AnyPathT) -> AnyPathT:
         return PureR2Path(path)
     elif path.startswith("https://"):
         return PureHTTPSPath(path)
+    elif path.startswith("http://"):
+        return PureHTTPPath(path)
     else:
         return Path(path)
