@@ -2,9 +2,9 @@
 
 import pytest
 
-from esp_data.datasets import AudioSet
-from esp_data import Dataset, DatasetConfig
-from esp_data.io import exists
+from alp_data.datasets import AudioSet
+from alp_data import Dataset, DatasetConfig
+from alp_data.io import exists
 
 
 @pytest.fixture
@@ -267,7 +267,6 @@ def test_from_config_with_transformations() -> None:
     dataset_config = DatasetConfig(
         dataset_name="audioset",
         split="train",
-        data_root="gs://esp-ml-datasets/audioset/v0.1.0/raw/",
         streaming=True,
         backend="pandas",
     )

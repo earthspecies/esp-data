@@ -10,7 +10,7 @@ from pathlib import Path
 import pytest
 from fsspec.implementations.http import HTTPFileSystem
 
-from esp_data.io import anypath, filesystem_from_path
+from alp_data.io import anypath, filesystem_from_path
 
 
 def test_anypath_local_path_with_file_operations():
