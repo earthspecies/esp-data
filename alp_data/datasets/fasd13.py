@@ -11,9 +11,12 @@ import pandas as pd
 
 from alp_data import Dataset, DatasetConfig, DatasetInfo, register_dataset
 from alp_data.backends import BackendType
-from alp_data.io import DATA_HOME, AnyPathT, anypath, audio_stereo_to_mono, read_audio
+from alp_data.io import AnyPathT, anypath, audio_stereo_to_mono, read_audio
 
-_RAW_ROOT = f"{DATA_HOME}/fasd13/v0.1.0/raw"
+# Staged in the ingestion bucket. Moves under DATA_HOME (as WABAD and most
+# datasets resolve) when this lands; the loader picks the new location up
+# from this one constant.
+_RAW_ROOT = "gs://esp-data-ingestion/fasd13/v0.1.0"
 
 # Sub-dataset codes, in the order of the FASD13 summary table.
 SUBDATASET_CODES = (
