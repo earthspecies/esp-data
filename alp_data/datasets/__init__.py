@@ -11,6 +11,7 @@ from .birdeep import Birdeep
 from .birdset import BirdSet
 from .chiffchaff_id import ChiffchaffId
 from .corvid_wascher import CorvidWascher
+from .dartmouth_avian_soundscapes import DartmouthAvianSoundscapes
 from .dclde2026 import DCLDE2026
 from .dinardo_dolphin_whistles import DinardoDolphinWhistles
 from .esp_raincoast import ESPRaincoast
@@ -19,6 +20,7 @@ from .giant_otters import GiantOtters
 from .gibbon_solos import GibbonSolos
 from .hawaiian_birds import HawaiianBirds
 from .inaturalist import INaturalist
+from .indian_fauna_strong import IndianFaunaStrong
 from .infant_marmosets_vox import InfantMarmosetsVox
 from .insectset_459 import InsectSet459
 from .littleowl_id import LittleOwlId
@@ -26,6 +28,7 @@ from .macaques_coo_calls import MacaquesCooCalls
 from .nocturnal_bird_migration import NocturnalBirdMigration
 from .pipit_id import PipitId
 from .powdermill import Powdermill
+from .pteroset import PteroSet
 from .subsegmentation import Subsegmentation
 from .superb_starling import SuperbStarling
 from .voxaboxen import Voxaboxen, VoxaboxenEvents
@@ -33,6 +36,7 @@ from .wabad import WABAD
 from .watkins import Watkins
 from .xeno_canto import XenoCanto
 from .xeno_canto_annotated_jeantet_23 import XenoCantoAnnotatedJeantet23
+from .xeno_canto_strong import XenoCantoStrong
 from .zebra_finch_julie_elie import ZebraFinchJulieElie
 
 __all__ = [
@@ -73,4 +77,8 @@ __all__ = [
     "CorvidWascher",
     "DCLDE2026",
     "Watkins",
+    "DartmouthAvianSoundscapes",
+    "PteroSet",
+    "IndianFaunaStrong",
+    "XenoCantoStrong",
 ]
