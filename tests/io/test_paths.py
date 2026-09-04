@@ -10,7 +10,7 @@ from pathlib import Path
 import pytest
 from fsspec.implementations.http import HTTPFileSystem
 
-from alp_data.io import anypath, filesystem, filesystem_from_path
+from alp_data.io import anypath, filesystem, filesystem_from_path, rm
 
 
 def test_anypath_local_path_with_file_operations():
@@ -84,3 +84,18 @@ def test_filesystem_unknown_protocol():
     """An unsupported protocol raises with the supported backends listed."""
     with pytest.raises(ValueError, match="Unknown backend: ftp"):
         filesystem("ftp")
+
+
+@pytest.mark.parametrize(
+    "url", ["https://example.com/datasets/file.json", "http://example.com/datasets/file.json"]
+)
+def test_rm_rejects_http_paths(url):
+    """Deleting over HTTP(S) fails with an explanatory message and no request."""
+    with pytest.raises(NotImplementedError, match="read-only"):
+        rm(url)
+
+
+def test_rm_rejects_http_paths_before_expanding():
+    """`recursive=True` must not issue requests while expanding the path first."""
+    with pytest.raises(NotImplementedError, match="Cannot delete over HTTP"):
+        rm("https://example.com/datasets/", recursive=True)
