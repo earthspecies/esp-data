@@ -35,6 +35,19 @@ def filesystem(
     implementation for the two schemes, so the scheme is carried by the URL passed
     to the filesystem rather than by the filesystem object itself.
 
+    An `HTTPFileSystem` is not equivalent to the bucket backends. Plain HTTP has
+    no listing API, so `fsspec` emulates one by fetching the URL and scraping
+    `<a href=...>` links out of the response when it is HTML:
+
+    - `ls()` and `glob()` work only against a server that returns an HTML index
+      (an Apache/nginx autoindex, for example).
+    - On an object-storage endpoint such as a Cloudflare R2 public bucket there
+      is no index document, so `ls()` raises `FileNotFoundError` and `glob()`
+      returns an empty list **without raising**. Prefer an explicit manifest of
+      URLs over discovering files by glob.
+    - Reads are the supported operation. `alp_data.io.rm` rejects HTTP(S) paths,
+      and `alp_data.io.exists` costs a GET rather than a metadata lookup.
+
     For the 'r2' protocol, it automatically retrieves the necessary credentials
     (access key ID, secret access key, endpoint URL) from GCP Secret Manager.
 

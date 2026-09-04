@@ -2,7 +2,7 @@
 
 ## What does it do?
 
-The `io` module provides a set of functions for reading and writing data to and from various file formats and storage systems. It supports local files, Google Cloud Storage (GCS), and Cloudflare R2 buckets.
+The `io` module provides a set of functions for reading and writing data to and from various file formats and storage systems. It supports local files, Google Cloud Storage (GCS), Cloudflare R2 buckets, and plain HTTP(S) endpoints (such as a Cloudflare R2 public bucket, which needs no credentials).
 
 !!! warning
     We have dropped support for `cloudpathlib` which was the basis for `anypath` until version 1.2.1. We now have our own implementation of a "cloud path" (e.g. "gs://my-bucket/file.txt"). This implementation `PureGSPath` or `PureS3Path` is more lightweight and provides **path manipulation features only**. For file operations on cloud paths (reading, writing, copying, listing files), you must use the `filesystem` interface.
@@ -298,6 +298,47 @@ You can also create the appropriate filesystem object from a path using `filesys
 ```python
 fs = filesystem_from_path("gs://esp-ci-cd-tests")
 ```
+
+### HTTP(S) endpoints
+
+Passing `"http"` or `"https"` to `filesystem()` (or an `http(s)://` URL to
+`filesystem_from_path()`) returns an `fsspec` `HTTPFileSystem`. This lets you read
+from a public bucket — for example a Cloudflare R2 `*.r2.dev` domain — without any
+credentials.
+
+```python
+fs = filesystem_from_path("https://pub-xxxxxxxx.r2.dev/test/split.jsonl")
+
+with fs.open("https://pub-xxxxxxxx.r2.dev/test/split.jsonl", "rb") as f:
+    content = f.read()
+```
+
+!!! warning "HTTP(S) is read-only and cannot list or glob on a public bucket"
+    An `HTTPFileSystem` looks like the bucket backends but behaves differently, because
+    plain HTTP has no listing API:
+
+    - **Read-only.** `alp_data.io.rm` raises `NotImplementedError` for `http(s)://`
+      paths. Writing is not supported either.
+    - **Listing and globbing need an HTML index.** `fsspec` emulates a listing by
+      fetching the URL and scraping `<a href=...>` links out of the response when it
+      is HTML. That works against a directory-index server, but an R2 public bucket
+      serves no index document, so `ls()` raises `FileNotFoundError` and — the trap —
+      `glob()` returns `[]` **without raising**:
+
+        ```python
+        fs.ls("https://pub-xxxxxxxx.r2.dev/test/")          # FileNotFoundError
+        fs.glob("https://pub-xxxxxxxx.r2.dev/test/*.jsonl")  # [] - no error!
+        ```
+
+        Drive HTTP(S) reads from an explicit list of URLs rather than discovering
+        files by glob.
+    - **`exists()` costs a GET, not a HEAD.** `HTTPFileSystem` treats any status
+      below 400 as "exists", so avoid calling it in a loop over many URLs.
+    - **Redirects are followed across hosts**, including an `https://` &rarr;
+      `http://` downgrade, so a `PureHTTPSPath` does not by itself guarantee the
+      bytes arrived over TLS.
+    - **Prefer `https://` over `http://`.** Plain HTTP gives no integrity guarantee
+      for the data you fetch.
 
 ### File operations with filesystem
 
