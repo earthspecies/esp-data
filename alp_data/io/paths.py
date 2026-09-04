@@ -751,20 +751,105 @@ class PureR2Path(PureCloudPath):
     __slots__ = ()
 
 
-class PureHTTPSPath(PureCloudPath):
-    """HTTPS path."""
+class _PureURLPath(PureCloudPath):
+    """Shared behaviour for the HTTP(S) path classes.
+
+    A URL is not quite a path: everything after a `?` or a `#` is a query string
+    or a fragment rather than part of the filename. This base class strips that
+    tail when deriving `name`, which `suffix`, `suffixes` and `stem` are all
+    computed from, so filename-shaped properties describe the object being
+    fetched rather than the request that fetches it.
+
+    The stored path is left untouched, so `str()`, `parts`, `parent` and the URL
+    handed to `HTTPFileSystem` all keep the query string.
+
+    This class is internal: it sets no `cloud_prefix`, so instantiating it
+    directly raises `ValueError` just as `PureCloudPath` does.
+    """
+
+    __slots__ = ()
+
+    @staticmethod
+    def _strip_query(url: str) -> str:
+        """Return `url` without its query string or fragment.
+
+        Parameters
+        ----------
+        url : str
+            The URL to truncate.
+
+        Returns
+        -------
+        str
+            `url` up to the first `?` or `#`, whichever comes first, or `url`
+            unchanged if it contains neither.
+        """
+        cuts = [i for i in (url.find("?"), url.find("#")) if i != -1]
+        return url[: min(cuts)] if cuts else url
+
+    @property
+    def name(self) -> str:
+        """The final path component, ignoring any query string or fragment.
+
+        Returns
+        -------
+        str
+            The final component of the URL path, or an empty string for
+            host-only URLs. Unlike `PureCloudPath.name`, a trailing `?query`
+            or `#fragment` is not treated as part of the filename.
+        """
+        remainder = self._strip_query(self._path)[len(self.cloud_prefix) :]
+        if "/" not in remainder:
+            # Host only, e.g. "https://example.com": no filename.
+            return ""
+
+        _, _, rest = remainder.partition("/")
+        components = [component for component in rest.split("/") if component]
+        return components[-1] if components else ""
+
+
+class PureHTTPSPath(_PureURLPath):
+    """HTTPS path, e.g. an object in a Cloudflare R2 public bucket.
+
+    Path manipulation only; use `alp_data.io.filesystem_from_path` to read the
+    object. HTTP(S) endpoints are read-only.
+
+    Notes
+    -----
+    `name`, `suffix`, `suffixes` and `stem` ignore any `?query` or `#fragment`,
+    so `.../train.jsonl?X-Amz-Signature=abc` has suffix `.jsonl`. The query
+    string is still part of `str()`, `parts` and `parent`, and is what gets sent
+    to the server.
+
+    Path manipulation that rebuilds the final component drops the query string:
+    `with_suffix`, `with_stem` and `with_name` all rebuild from `parent`, so
+    `anypath(".../m.csv?sig=xyz").with_suffix(".jsonl")` yields
+    `.../m.jsonl` — with the signature gone. Re-derive such URLs from their
+    source rather than editing them.
+
+    A query string containing a literal `/` is still split into path components,
+    so `parts` and `parent` are unreliable for those URLs.
+    """
 
     cloud_prefix = "https://"
     __slots__ = ()
 
 
-class PureHTTPPath(PureCloudPath):
+class PureHTTPPath(_PureURLPath):
     """Plain HTTP path.
 
     Kept separate from `PureHTTPSPath` because `cloud_prefix` holds a single scheme
     and the scheme must survive round-tripping to `str`: the underlying
     `HTTPFileSystem` is handed the full URL, so rewriting `http://` as `https://`
     (or the reverse) would change which endpoint is contacted.
+
+    Prefer `PureHTTPSPath`. Plain HTTP offers no integrity guarantee for the bytes
+    fetched, and `HTTPFileSystem` follows redirects across hosts, so an `https://`
+    URL may in any case be downgraded to `http://` en route.
+
+    Notes
+    -----
+    Shares the query-string handling described on `PureHTTPSPath`.
     """
 
     cloud_prefix = "http://"
