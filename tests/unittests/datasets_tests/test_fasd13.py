@@ -12,6 +12,8 @@ sub-dataset (12 files, 0.20 h total), at fixed indices.
 
 from __future__ import annotations
 
+from io import StringIO
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -27,14 +29,13 @@ EXPECTED_LEN_AS = 12
 EXPECTED_FIRST_AS_AUDIO_SHA256 = (
     "77aadf4a911c9b58073a4fe13d98a5075db3a18241ed6d0345886aef92816fe6"
 )
-AS_ANNOTATIONS_SHA256 = "530ad2465f5d1b1c1677885bca516a7b086f267784625f34788f53ba785a3e30"
+AS_ANNOTATIONS_SHA256 = "d7005afd70b68e5b43578cc0fb4a16049f689156bb6924105c448b42efbd01db"
 
 SELECTION_TABLE_COLUMNS = [
     "Selection",
     "Begin Time (s)",
     "End Time (s)",
     "Q",
-    "Label",
     "event_index",
 ]
 # ---------------------------------------------------------------------------
@@ -75,10 +76,11 @@ def test_subdataset_split_is_consistent(ds: FASD13):
 
 
 def test_get_available_labels(ds: FASD13):
-    """FASD13's positive class is nameless, so the vocabulary is always `target`."""
+    """The class is nameless, so `Q` is the annotation column: statuses, not names."""
     labels = ds.get_available_labels()
     assert isinstance(labels, list), "get_available_labels should return a list"
-    assert labels == ["target"], f"Expected ['target'], got {labels}"
+    assert labels == ["POS"], f"AS has no UNK events, so expected ['POS'], got {labels}"
+    assert FASD13(split="MS", backend="pandas").get_available_labels() == ["POS", "UNK"]
 
 
 def test_check_audio(ds: FASD13):
@@ -190,7 +192,7 @@ def test_check_selection_table(ds: FASD13):
         assert len(st) > 0, f"[{idx}] selection table is empty"
 
         assert set(st["Q"].astype(str)) <= {"POS", "UNK", "NEG"}, f"[{idx}] unexpected Q values"
-        assert set(st["Label"].astype(str)) == {"target"}, f"[{idx}] unexpected Label values"
+        assert "Label" not in st.columns, f"[{idx}] Label marked UNK events as positive"
         assert (st["End Time (s)"] >= st["Begin Time (s)"]).all(), f"[{idx}] negative-length event"
 
         duration = item["audio"].size / item["sample_rate"]
@@ -271,15 +273,39 @@ def test_windowed_read_on_long_recording():
     assert item["audio"].dtype == np.float32
 
 
-def test_n_shot_columns(ds_all: FASD13):
-    """Every recording should carry the metadata needed to build an N-shot episode."""
-    rows = ds_all._data.unwrap
-    assert (rows["n_shots_available"] >= 1).all()
-    assert (rows["n_events"] >= rows["n_pos"]).all()
+def test_shot_end_times_are_derived_not_stored(ds_all: FASD13):
+    """
+    Shot boundaries are computed from the selection table, never stored.
 
-    shot_end_times = [float(t) for t in str(rows["shot_end_times"].iloc[0]).split(",")]
-    assert len(shot_end_times) == int(rows["n_shots_available"].iloc[0])
-    assert shot_end_times == sorted(shot_end_times), "shot_end_times should be ordered"
+    A stored copy goes stale under windowed reads, where table times are
+    re-based but a manifest column would not be -- the two would end up in
+    different coordinate systems on the same row.
+    """
+    rows = ds_all._data.unwrap
+    assert "shot_end_times" not in rows.columns
+    assert "n_shots_available" not in rows.columns
+
+    ends = ds_all.shot_end_times(0)
+    assert 1 <= len(ends) <= 5
+    assert ends == sorted(ends), "shot end times should be ascending"
+
+
+def test_shot_end_times_exclude_unk(ds_all: FASD13):
+    """UNK events must not be usable as shots, per the protocol."""
+    ms = FASD13(split="MS", backend="pandas")          # 632 UNK events
+    st = pd.read_csv(StringIO(ms._data[0]["selection_table"]), sep="\t")
+    pos_ends = sorted(float(t) for t in st[st["Q"] == "POS"]["End Time (s)"])
+    assert ms.shot_end_times(0) == pos_ends[:5]
+
+    unk_ends = {float(t) for t in st[st["Q"] == "UNK"]["End Time (s)"]}
+    assert not (set(ms.shot_end_times(0)) & unk_ends), "an UNK event was used as a shot"
+
+
+def test_shot_end_times_stay_absolute_under_windowing(ds: FASD13):
+    """Boundaries must not drift when the caller reads a window."""
+    before = ds.shot_end_times(0)
+    _windowed(ds, 0, 5.0, 15.0)
+    assert ds.shot_end_times(0) == before
 
 
 def test_per_row_licensing(ds_all: FASD13):

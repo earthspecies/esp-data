@@ -1,13 +1,14 @@
 """Build the FASD13 few-shot detection benchmark (Zenodo 15843741).
 
 Hoffman et al. 2025, "Synthetic data enables context-aware bioacoustic sound
-event detection" (arXiv:2503.00296). FASD13 is the *evaluation* benchmark from
-the DRASDIC paper: 13 bioacoustics sub-datasets, 109 recordings, ~143 h, each
-recording paired with a DCASE-style CSV marking onsets/offsets of a single
+event detection" (arXiv:2503.00296). FASD13 is the *evaluation* benchmark
+introduced by that paper: 13 bioacoustics sub-datasets, 109 recordings, ~143 h,
+each recording paired with a DCASE-style CSV marking onsets/offsets of a single
 predetermined target category.
 
-Not to be confused with DRASDIC, the *synthetic training* corpus released by the
-same paper. FASD13 shares no audio with it.
+DRASDIC ("Domain Randomization for Animal Sound Detection In-Context") is the
+paper's *model*, not a dataset. It is trained on synthetic scenes from the same
+work and evaluated on FASD13; FASD13 shares no audio with that training data.
 
 Source layout (per sub-dataset zip)::
 
@@ -46,6 +47,7 @@ import sys
 import urllib.request
 import zipfile
 from concurrent.futures import ProcessPoolExecutor, as_completed
+from io import StringIO
 from pathlib import Path
 
 import pandas as pd
@@ -64,14 +66,14 @@ SUPPORT_LEFT_FRACTION = 1.0 / 3.0
 # Resampling is streamed in blocks of this many seconds to bound peak memory.
 _BLOCK_SEC = 30.0
 
-ST_COLUMNS = ["Selection", "Begin Time (s)", "End Time (s)", "Q", "Label", "event_index"]
+ST_COLUMNS = ["Selection", "Begin Time (s)", "End Time (s)", "Q", "event_index"]
 
-# The single positive class per recording is nameless in FASD13 -- for few-shot
-# detection it is defined by the support examples, not by a name. A constant
-# label keeps the selection table compatible with the WABAD-family transforms
-# (annotation_column: Label); ``detection_target`` records what *kind* of
-# category the target is.
-TARGET_LABEL = "target"
+# FASD13's target class is nameless -- in few-shot detection it is defined by
+# the support examples, not a name -- so there is no species-style label
+# column. ``Q`` carries the per-event status (POS / UNK) and is the single
+# source of truth; ``detection_target`` on the row records what *kind* of
+# category the target is. An earlier revision also wrote a constant
+# ``Label="target"`` on every row, which marked UNK events as positives.
 
 # Per-sub-dataset metadata, transcribed from the Zenodo summary table and
 # LICENSE.txt. ``n_files`` / ``duration_hr`` / ``n_events`` are the published
@@ -588,17 +590,30 @@ def _read_events(anno_fp: Path) -> pd.DataFrame:
     return df
 
 
-def _shot_end_times(df: pd.DataFrame, max_shots: int = MAX_SHOTS) -> list[float]:
-    """Return the end times of the first ``max_shots`` non-UNK events.
+def _shot_ends_from_selection_tsv(tsv: str, max_shots: int = MAX_SHOTS) -> list[float]:
+    """Derive shot end times from a serialised selection table.
+
+    The manifest does not store these: they are a pure function of the
+    selection table, and a stored copy silently goes stale under windowed
+    reads, where table times are re-based but a stored column would not be.
+
+    Parameters
+    ----------
+    tsv : str
+        Serialised selection table, as carried in the ``selection_table``
+        column.
+    max_shots : int
+        Maximum number of shots to return.
 
     Returns
     -------
     list[float]
-        Ascending end times; shorter than ``max_shots`` if the recording has
-        fewer usable events.
+        Ascending, recording-absolute end times of the first ``max_shots``
+        non-UNK events.
     """
-    known = df[df["Q"] != "UNK"]
-    return [float(t) for t in sorted(known["Endtime"])[:max_shots]]
+    st = pd.read_csv(StringIO(tsv), sep="\t")
+    known = st[st["Q"] != "UNK"]
+    return [float(t) for t in sorted(known["End Time (s)"])[:max_shots]]
 
 
 def _selection_tsv(df: pd.DataFrame) -> str:
@@ -614,7 +629,6 @@ def _selection_tsv(df: pd.DataFrame) -> str:
             "Begin Time (s)": [round(float(v), 4) for v in df["Starttime"]],
             "End Time (s)": [round(float(v), 4) for v in df["Endtime"]],
             "Q": list(df["Q"]),
-            "Label": [TARGET_LABEL] * len(df),
             "event_index": [int(v) for v in df["event_index"]],
         }
     )[ST_COLUMNS]
@@ -660,7 +674,6 @@ def build_manifests(root: Path, durations_csv: Path, out_dir: Path, codes: list[
                 raise SystemExit(f"missing annotation CSV for {rel}")
             dur, native_sr, channels = meta[rel]
             df = _read_events(anno_fp)
-            shots = _shot_end_times(df)
             n_pos = int((df["Q"] == "POS").sum())
             n_unk = int((df["Q"] == "UNK").sum())
             rows.append(
@@ -682,8 +695,6 @@ def build_manifests(root: Path, durations_csv: Path, out_dir: Path, codes: list[
                     "n_events": len(df),
                     "n_pos": n_pos,
                     "n_unk": n_unk,
-                    "n_shots_available": len(shots),
-                    "shot_end_times": ",".join(f"{t:.4f}" for t in shots),
                     "taxa": sd["taxa"],
                     "detection_target": sd["detection_target"],
                     "recording_type": sd["recording_type"],
@@ -698,7 +709,8 @@ def build_manifests(root: Path, durations_csv: Path, out_dir: Path, codes: list[
             raise SystemExit(f"no recordings found for sub-dataset {code} under {root}")
         df_code = pd.DataFrame(rows)
         df_code.to_csv(out_dir / f"fasd13_{code}.csv", index=False)
-        short = df_code[df_code["n_shots_available"] < MAX_SHOTS]
+        n_shots = df_code["selection_table"].map(lambda t: len(_shot_ends_from_selection_tsv(t)))
+        short = df_code[n_shots < MAX_SHOTS]
         warn = f"  !! {len(short)} file(s) with <{MAX_SHOTS} shots" if len(short) else ""
         print(
             f"  {code} ({sd['name']}): {len(df_code)} recs, "
@@ -892,7 +904,7 @@ def build_support(
         starts = [float(v) for v in known["Starttime"].tolist()[:MAX_SHOTS]]
         if len(starts) < MAX_SHOTS:
             print(f"  !! {code}/{stem}: only {len(starts)} usable events", flush=True)
-        shot_ends = [float(t) for t in str(r["shot_end_times"]).split(",") if t]
+        shot_ends = _shot_ends_from_selection_tsv(str(r["selection_table"]))
         support_end = shot_ends[MAX_SHOTS - 1] if len(shot_ends) >= MAX_SHOTS else shot_ends[-1]
         jobs.append(
             (
@@ -924,13 +936,13 @@ def build_support(
     # Hard guard: no support clip may reach past the Nth event. Crossing that
     # line hands us audio DRASDIC is not allowed and prints query-region onsets
     # into the prompt, so it must fail the build rather than ship quietly.
-    cutoff = {
-        (str(r["subdataset"]), str(r["sound_name"])): float(
-            str(r["shot_end_times"]).split(",")[MAX_SHOTS - 1]
+    _ends = {
+        (str(r["subdataset"]), str(r["sound_name"])): _shot_ends_from_selection_tsv(
+            str(r["selection_table"])
         )
         for _, r in df_all.iterrows()
-        if len(str(r["shot_end_times"]).split(",")) >= MAX_SHOTS
     }
+    cutoff = {k: v[MAX_SHOTS - 1] for k, v in _ends.items() if len(v) >= MAX_SHOTS}
     over = [
         f"{r['subdataset']}/{r['sound_name']}#{r['shot_index']} "
         f"ends {r['window_end_sec']:.2f} > {cutoff[(r['subdataset'], r['sound_name'])]:.2f}"

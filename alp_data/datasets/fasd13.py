@@ -18,6 +18,10 @@ from alp_data.io import AnyPathT, anypath, audio_stereo_to_mono, read_audio
 # from this one constant.
 _RAW_ROOT = "gs://esp-data-ingestion/fasd13/v0.1.0"
 
+# The benchmark ships five pre-cut support clips per recording, so five is the
+# largest episode the published support set can serve.
+MAX_SHOTS = 5
+
 # Sub-dataset codes, in the order of the FASD13 summary table.
 SUBDATASET_CODES = (
     "AS",
@@ -38,114 +42,132 @@ SUBDATASET_CODES = (
 
 @register_dataset
 class FASD13(Dataset):
-    """FASD13 Dataset
+    """FASD13: Fewshot Animal Sound Detection 13.
 
     Description
     -----------
-    FASD13 ("Fewshot Animal Sound Detection 13") is the evaluation benchmark
-    accompanying *Synthetic data enables context-aware bioacoustic sound event
-    detection* (Hoffman et al., 2025). It gathers 13 sub-datasets, 109
-    recordings and roughly 143 hours of audio spanning anurans, birds,
-    primates, whales, insects, spiders and gunshots, recorded through
-    terrestrial and underwater passive acoustic monitoring, on-body recorders,
-    substrate-borne recording and in the lab.
+    The evaluation benchmark introduced by *Synthetic data enables
+    context-aware bioacoustic sound event detection* (Hoffman et al., 2025):
+    13 sub-datasets, 109 recordings and roughly 143 hours of audio spanning
+    anurans, birds, primates, whales, insects, spiders and gunshots, recorded
+    through terrestrial and underwater passive acoustic monitoring, on-body
+    recorders, substrate-borne recording and in the lab.
 
     Each entry is a full recording plus a selection table, in the same shape as
-    the WABAD dataset. The benchmark is deliberately evaluation-only: it
-    complements, and shares no audio with, the synthetic *training* corpus
-    released by the same paper (DRASDIC).
+    the WABAD dataset. The benchmark is evaluation-only. DRASDIC ("Domain
+    Randomization for Animal Sound Detection In-Context") is that paper's
+    *model*, trained on synthetic scenes and evaluated on FASD13; FASD13 shares
+    no audio with its training data.
 
-    Two of the 13 sub-datasets (`CC`, Carrion Crow, and `JS`, Jumping Spider)
-    are published for the first time in FASD13; the other 11 are re-releases.
-    Note the extreme duration imbalance: `HG` (72 h) and `GS` (38 h) make up
-    77 % of the benchmark between them, so cap or stratify per sub-dataset
-    before pooling.
+    Sub-datasets
+    ------------
+    code  name            files  h      events  detection target      license
+    ----  --------------  -----  -----  ------  --------------------  ------------------------
+    AS    AnuraSet        12     0.2    162     Species               CC-BY-1.0
+    CC    Carrion Crow    10     10.0   2200    Species+Life Stage    CC-BY-SA-4.0
+    GS    Gunshot         7      38.33  85      Production Mechanism  CC-BY-NC-4.0
+    HA    Hawaiian Birds  12     1.1    628     Species               CC-BY-4.0
+    HG    Hainan Gibbons  9      72.0   483     Species               CC-BY-NC-SA-4.0
+    HW    Humpback Whale  10     2.79   1565    Species               public-domain
+    JS    Jumping Spider  4      0.23   924     Sound Type            CC-BY-SA-4.0
+    KD    Katydid         12     2.0    883     Species               public-domain
+    MS    Marmoset        10     1.67   1369    Call Type             custom-citation-required
+    PM    Powdermill      4      6.42   2032    Species               public-domain
+    RG    Ruffed Grouse   2      1.5    34      Species               public-domain
+    RS    Rana Sierrae    7      1.87   552     Species               public-domain
+    RW    Right Whale     10     5.0    398     Species               CC-BY-4.0
+
+    `CC` and `JS` are published for the first time in FASD13; the other 11 are
+    re-releases. Sources, by first author:
+
+    AS Cañas 2023; CC Hoffman 2025; GS Gottesman 2024; HA Navine 2022; HG Dufourq 2020
+    HW Allen 2021; JS Hoffman 2025; KD Madhusudhana 2024; MS Sarkar 2023; PM Chronister 2021
+    RG Lapp 2022; RS Lapp 2023; RW Simard 2020
+
+    Full citations are in the row-level `citation` column, and `LICENSE.txt`
+    sits alongside the manifests. Note the duration imbalance: `HG` (72 h) and
+    `GS` (38 h) are 77 % of the benchmark between them, so cap or stratify per
+    sub-dataset before pooling.
 
     Labels
     ------
-    Every recording is annotated for a single, *nameless* target category. In
-    few-shot detection the target is defined by the support examples rather
-    than by a name, so the selection table's `Label` column is the constant
-    `"target"`, and the row-level `detection_target` column records what kind
-    of category the sub-dataset annotates (Species, Call Type, Sound Type,
-    Production Mechanism, or Species+Life Stage).
+    Every recording is annotated for a single, *nameless* target category -- in
+    few-shot detection the target is defined by the support examples, not by a
+    name -- so there is no species-style label column. The row-level
+    `detection_target` records what kind of category a sub-dataset annotates
+    (Species, Call Type, Sound Type, Production Mechanism, Species+Life Stage).
 
-    Selection tables carry `Selection`, `Begin Time (s)`, `End Time (s)`, `Q`,
-    `Label` and `event_index`. `Q` is one of `POS`, `UNK` or `NEG`. Per the
-    official protocol, `UNK` events are neither positives nor negatives and
-    must be masked out of scoring. There are no frequency bounds -- FASD13 is
-    time-only.
+    Selection tables carry `Selection`, `Begin Time (s)`, `End Time (s)`, `Q`
+    and `event_index`. `Q` is the per-event status and is the only annotation
+    column: `POS` for a target event, `UNK` where annotators could not
+    determine presence. Per the protocol `UNK` events are neither positives nor
+    negatives and **must be masked out of scoring** rather than counted as
+    detections; 1,029 of the 12,344 events are `UNK`, concentrated in `MS`
+    (32 %), `RS` (19 %) and `CC` (11 %). `event_index` numbers the non-`UNK`
+    events in end-time order and is `-1` for `UNK`. There are no frequency
+    bounds -- FASD13 is time-only.
 
     N-shot protocol
     ---------------
     Following Nolasco et al. 2023, events are ordered by end time and `UNK`
     events are excluded from shot selection. An N-shot system is given the
-    audio up through the end of the Nth event and must detect events in the
-    remainder, which is the only region scored. Each row carries
-    `n_shots_available` and `shot_end_times` (the end times of the first five
-    non-`UNK` events), so any episode with N <= 5 can be derived from the
-    selection table without re-reading the annotations. Together with the
-    windowed reads described below, that is everything an episode builder
-    needs, so episode construction itself stays outside this class.
+    audio up through the end of the Nth event, and must detect events in the
+    remainder, which is the only region scored.
+
+    Use `shot_end_times` to get those boundaries. They are derived from the
+    selection table on demand rather than stored, so they cannot fall out of
+    step with it, and they are always recording-absolute -- including when the
+    audio you hold is a window. When chunking a recording into query windows,
+    take the support region once from the start of the file and reuse it for
+    every window; deriving it per window would draw support from query audio.
 
     Windowed reads
     --------------
     A row carrying `window_start_sec` and `window_end_sec` reads only that
     segment, streamed from cloud storage rather than downloaded whole, and its
     selection table is re-based onto the window: non-overlapping events are
-    dropped and the rest are shifted and clipped so their times line up with
-    the returned audio. `event_index` is preserved, so a caller can still tell
-    which of the recording's events a row refers to.
+    dropped and the rest shifted and clipped to line up with the returned
+    audio. `event_index` is preserved, so a caller can still tell which of the
+    recording's events a row refers to.
 
-    This is what makes the benchmark usable without loading whole recordings.
-    Several sub-datasets ship 8-hour files -- one `HG` item is ~3.7 GB of
-    float32 at 32 kHz -- so cutting an N-shot support clip or chunking a query
-    region has to happen at read time.
+    This is what makes the benchmark usable without loading whole recordings:
+    several sub-datasets ship 8-hour files, so cutting a support clip or
+    chunking a query region has to happen at read time.
 
     Pre-resampled Audio
     -------------------
-    Three views of every recording are stored. `audio_fp` is the original, as
+    Three views of every recording are stored. `audio_fp` is the original as
     Zenodo ships it, at its native rate and channel count; `16khz_path` and
     `32khz_path` are pre-resampled mono mirrors. When `sample_rate` is 16000 or
-    32000 the matching mirror is read directly with no on-the-fly resampling.
-    Any other rate -- including `None`, which returns the audio at its native
-    rate -- reads the original, resampling from it with librosa's `kaiser_best`
-    method where needed. 32 kHz is the default.
+    32000 the matching mirror is read directly. Any other rate -- including
+    `None`, which returns native audio -- reads the original and resamples with
+    librosa's `kaiser_best` where needed. 32 kHz is the default.
 
-    Native rates span 8 kHz to 187.5 kHz. What the mirrors cost you, measured
-    rather than assumed:
+    Native rates span 8 kHz to 187.5 kHz, and what the mirrors cost differs by
+    sub-dataset:
 
-    - Very little bandwidth, despite the rates. `CC` (46.875 / 187.5 kHz),
-      `KD` (96 kHz) and `MS` (44.1 kHz) can represent content above the
-      mirrors' Nyquist, but at annotated events under 0.3 % of their energy
-      sits above 16 kHz -- 0.00 % for the single 187.5 kHz `CC` file. For
-      detection the 32 kHz mirror is a faithful view of every sub-dataset.
-    - `GS` (8 kHz) and `HG` (9.6 kHz) are *upsampled* into the mirrors, and
-      they are 77 % of the benchmark by duration, so a 32 kHz read of most of
-      FASD13 carries nothing above ~4-5 kHz. Nothing is lost by it, but do not
-      mistake the rate for bandwidth.
-    - `AS` and `HG` are stereo at source (21 recordings, 72.2 h). Reads are
-      mono-averaged whatever the view, as in WABAD; the originals keep their
-      channels for anyone who needs them.
+    - `KD` (katydids, 96 kHz native) carries genuine content above the mirrors'
+      16 kHz ceiling. Measured against adjacent background, its events show
+      more excess energy in 16-32 kHz than in either band below it, so the
+      32 kHz mirror discards part of the signal. Read the originals for `KD`.
+    - `CC` (46.875 / 187.5 kHz) and `MS` (44.1 kHz) have the headroom but do
+      not use it -- their event energy sits below 16 kHz, so the mirrors lose
+      nothing measurable.
+    - `GS` (8 kHz) and `HG` (9.6 kHz) are *upsampled* into the mirrors. They
+      are 77 % of the benchmark by duration, so a 32 kHz read of most of FASD13
+      carries nothing above ~4-5 kHz; do not mistake the rate for bandwidth.
+    - `AS` and `HG` are stereo at source. Reads are mono-averaged whatever the
+      view, as in WABAD; the originals keep their channels.
 
-    So read the originals for provenance, exact source bytes and channels --
-    not in the expectation of extra bandwidth.
-
-    Every `HA` recording is a FLAC bitstream carrying a `.wav` extension. Two
-    of them (`Hawaii_UHH_494_S04_20190418_203000.wav` and
-    `Hawaii_UHH_627_S02_20220323_100400.wav`) hold frames libsndfile cannot
-    decode, so their originals are published transcoded to plain PCM by ffmpeg,
-    which reads them in full. `HA` is 32 kHz mono at source, so this is a
-    container change only: both transcodes are bit-identical to the published
-    32 kHz mirror. The files exactly as Zenodo ships them are kept under
-    `raw/HA/` for provenance.
+    Two `HA` recordings are FLAC bitstreams under a `.wav` extension that
+    libsndfile cannot decode in full, so their originals are published
+    transcoded to PCM; `HA` is 32 kHz mono at source, so no audio is altered.
 
     Licensing
     ---------
-    Licensing is per sub-dataset rather than uniform: CC-BY-1.0, CC-BY-4.0,
-    CC-BY-SA-4.0, CC-BY-NC-4.0, CC-BY-NC-SA-4.0, public domain, and one custom
-    citation-required entry (`MS`). It is carried per row in the `license` and
-    `citation` columns; see also `LICENSE.txt` alongside the manifests.
+    Licensing is per sub-dataset rather than uniform (see the table above), and
+    `MS` requires citing two specific papers. It is carried per row in the
+    `license` and `citation` columns.
 
     References
     ----------
@@ -205,7 +227,7 @@ class FASD13(Dataset):
         super().__init__(output_take_and_give, backend=backend, streaming=streaming)
         self.split = split
         self._data = None
-        self.annotation_columns = ["Label"]
+        self.annotation_columns = ["Q"]
         self.sample_rate = sample_rate
 
         self._load()
@@ -430,22 +452,56 @@ class FASD13(Dataset):
 
         return ds, {}
 
-    def get_available_labels(self, anno_column: str | None = "Label") -> list[str]:
-        """Return the label vocabulary of the selection tables.
+    def shot_end_times(self, idx: int, n_shots: int = MAX_SHOTS) -> list[float]:
+        """Return the end times of the first `n_shots` non-`UNK` events.
 
-        FASD13 has a single, nameless positive class per recording, so this is
-        always `["target"]`. Use the `detection_target` column for the kind of
-        category each sub-dataset annotates.
+        Derived from the recording's selection table on each call rather than
+        stored on the row, so it cannot fall out of step with the annotations.
+        Times are always **recording-absolute**, including for a row that is
+        read as a window -- the returned audio may start partway through the
+        recording, but these boundaries do not move with it.
+
+        `shot_end_times(idx)[n - 1]` is the end of the support region for an
+        n-shot episode: everything after it is query. When splitting a
+        recording into several query windows, take this once and reuse it, so
+        that every window is scored against support drawn from the start of the
+        file.
+
+        Parameters
+        ----------
+        idx : int
+            Index of the recording.
+        n_shots : int
+            Maximum number of shots to return.
+
+        Returns
+        -------
+        list[float]
+            Ascending, recording-absolute end times; shorter than `n_shots`
+            if the recording has fewer usable events.
+        """
+        st = pd.read_csv(StringIO(self._data[idx]["selection_table"]), sep="\t")
+        known = st[st["Q"] != "UNK"]
+        return [float(t) for t in sorted(known["End Time (s)"])[:n_shots]]
+
+    def get_available_labels(self, anno_column: str | None = "Q") -> list[str]:
+        """Return the event-status vocabulary of the selection tables.
+
+        FASD13's target class is nameless, so there is no species-style label
+        column; `Q` is the annotation column. This returns the statuses present
+        in the split, normally `["POS", "UNK"]`, or `["POS"]` for the nine
+        sub-datasets with no `UNK` events. Use the row-level `detection_target`
+        for the kind of category a sub-dataset annotates.
 
         Parameters
         ----------
         anno_column : str | None
-            Annotation column to read; only `"Label"` is meaningful here.
+            Selection-table column to read; only `"Q"` is meaningful here.
 
         Returns
         -------
         list[str]
-            A sorted list of all the available labels for anno_column.
+            A sorted list of the values present in anno_column.
         """
         available_labels = set()
         for row in self._data:

@@ -63,7 +63,7 @@ import numpy as np
 from alp_data.datasets import FASD13
 from alp_data.datasets.fasd13 import SUBDATASET_CODES
 
-ST=["Selection","Begin Time (s)","End Time (s)","Q","Label","event_index"]
+ST=["Selection","Begin Time (s)","End Time (s)","Q","event_index"]
 # AS is the smallest sub-dataset (12 files, 0.20 h) -- keep smoke reads there.
 for sr in (16000,32000):
     ds=FASD13(split="AS",sample_rate=sr)
@@ -83,10 +83,18 @@ assert set(ds.available_splits)=={"all",*SUBDATASET_CODES}
 assert codes==set(SUBDATASET_CODES), codes ^ set(SUBDATASET_CODES)
 assert ds.available_sample_rates==[16000,32000], ds.available_sample_rates
 
-# every recording must expose 5 usable shots
-short=[(r["subdataset"],r["sound_name"],r["n_shots_available"]) for r in rows if int(r["n_shots_available"])<5]
+# every recording must expose 5 usable shots (derived, not stored)
+short=[(r["subdataset"],r["sound_name"],len(ds.shot_end_times(i)))
+       for i,r in enumerate(rows) if len(ds.shot_end_times(i))<5]
 print("recordings with <5 shots:",len(short))
 assert not short, short
+
+# UNK must never be usable as a shot
+import pandas as _pd
+from io import StringIO as _S
+_st=_pd.read_csv(_S(rows[0]["selection_table"]),sep="\t")
+assert "Label" not in _st.columns, "Label column marks UNK events as positive"
+assert set(_st["Q"])<= {"POS","UNK"}, sorted(set(_st["Q"]))
 
 print("labels:",FASD13(split="AS").get_available_labels())
 print("SMOKE OK")
