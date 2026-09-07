@@ -6,17 +6,25 @@ extensions against a real object-storage endpoint, which is the case they were
 added for, and pin down the behaviours documented in `alp_data.io.filesystem`
 and `docs/io.md` (no listing API, range reads, GET-based `exists`).
 
+The last group covers `read_audio` over HTTP(S): a time-range read streams the
+segment with ffmpeg range requests instead of downloading the whole file, the
+same fast path `gs://` paths already take. Those tests need the ffmpeg binaries
+and skip without them, since the `tests/io` CI job does not install ffmpeg.
+
 They are marked `network` and skip when the bucket is unreachable, so an offline
 checkout still passes. Run only these with `pytest -m network`, or skip them
 with `pytest -m "not network"`.
 """
 
 import json
+import shutil
 
+import numpy as np
 import pytest
 from fsspec.implementations.http import HTTPFileSystem
 
-from alp_data.io import anypath, exists, filesystem_from_path, read_text
+import alp_data.io.read_utils as read_utils
+from alp_data.io import anypath, exists, filesystem_from_path, get_audio_info, read_audio, read_text
 from alp_data.io.paths import PureHTTPPath, PureHTTPSPath
 
 R2_PUBLIC_DIR = "https://pub-ad974658c4664976b92e83cd9e627e83.r2.dev/test"
@@ -27,16 +35,30 @@ MISSING_URL = f"{R2_PUBLIC_DIR}/this-object-does-not-exist.jsonl"
 JSONL_SIZE = 1394890
 """Size in bytes of `JSONL_URL`, used to check reads are complete."""
 
+WAV_NAME = "beans_v0.1.0_raw_audio_egyptian_fruit_bats_10360.wav"
+WAV_URL = f"{R2_PUBLIC_DIR}/{WAV_NAME}"
+WAV_SR = 250000
+WAV_FRAMES = 598863
+"""Sample rate and frame count of `WAV_URL`: a mono 32-bit float WAV, so an
+ffmpeg segment decode is lossless and can be compared exactly."""
+
 pytestmark = pytest.mark.network
+
+requires_ffmpeg = pytest.mark.skipif(
+    shutil.which("ffmpeg") is None or shutil.which("ffprobe") is None,
+    reason="ffmpeg/ffprobe are not installed",
+)
 
 
 @pytest.fixture(scope="module", autouse=True)
 def require_public_bucket():
     """Skip the whole module when the public bucket cannot be reached."""
-    try:
-        HTTPFileSystem().info(JSONL_URL)
-    except Exception as exc:  # noqa: BLE001 - any failure means "no bucket, no test"
-        pytest.skip(f"public R2 bucket is unreachable: {type(exc).__name__}: {exc}")
+    fs = HTTPFileSystem()
+    for url in (JSONL_URL, WAV_URL):
+        try:
+            fs.info(url)
+        except Exception as exc:  # noqa: BLE001 - any failure means "no bucket, no test"
+            pytest.skip(f"public R2 bucket is unreachable: {type(exc).__name__}: {exc}")
 
 
 @pytest.fixture(scope="module")
@@ -139,3 +161,99 @@ def test_ls_is_unavailable_on_an_object_storage_endpoint():
 def test_glob_returns_nothing_instead_of_raising():
     """`glob` silently finds no files here — hence the "use a manifest" guidance."""
     assert filesystem_from_path(R2_PUBLIC_DIR).glob(f"{R2_PUBLIC_DIR}/*.jsonl") == []
+
+
+def test_read_audio_reads_a_whole_wav_over_https():
+    """A full-file audio read needs no ffmpeg and returns every frame."""
+    audio, sr = read_audio(WAV_URL)
+    assert sr == WAV_SR
+    assert audio.shape == (WAV_FRAMES,)
+
+
+def test_get_audio_info_over_https():
+    """Metadata is read from the object without decoding all of it."""
+    info = get_audio_info(WAV_URL)
+    assert info["sr"] == WAV_SR
+    assert info["num_frames"] == WAV_FRAMES
+    assert info["num_channels"] == 1
+    assert info["format"] == "WAV"
+
+
+@requires_ffmpeg
+def test_read_audio_segment_over_https_uses_ffmpeg(monkeypatch):
+    """A time range takes the ffmpeg streaming path, not the download fallback.
+
+    The fallback is replaced by a raising stub, so a silently degraded read
+    (`FFmpegSegmentError` caught and swallowed by `read_audio`) fails the test
+    instead of passing with the right numbers for the wrong reason.
+    """
+
+    def no_fallback(*args, **kwargs):
+        raise AssertionError("expected the ffmpeg segment path, got the full-download fallback")
+
+    monkeypatch.setattr(read_utils, "_read_audio_by_time", no_fallback)
+
+    segment, sr = read_audio(WAV_URL, start_time=1.0, end_time=1.5)
+
+    assert sr == WAV_SR
+    assert segment.dtype == np.float32
+    assert segment.shape == (int(0.5 * WAV_SR),)
+
+
+@requires_ffmpeg
+def test_read_audio_segment_over_https_matches_full_download():
+    """The streamed segment is the exact same audio a full download decodes.
+
+    The source is 32-bit float WAV, so both paths decode losslessly and the
+    frames must agree bit for bit.
+    """
+    segment, sr = read_audio(WAV_URL, start_time=1.0, end_time=1.5)
+    expected, expected_sr = read_utils._read_audio_by_time(WAV_URL, 1.0, 1.5)
+
+    assert sr == expected_sr
+    np.testing.assert_array_equal(segment, expected.astype(np.float32))
+
+
+@requires_ffmpeg
+def test_read_audio_segment_over_https_reads_to_end_of_file():
+    """With no `end_time`, ffmpeg streams from the offset to the last frame."""
+    segment, sr = read_audio(WAV_URL, start_time=2.0)
+    assert sr == WAV_SR
+    assert segment.shape == (WAV_FRAMES - 2 * WAV_SR,)
+
+
+@requires_ffmpeg
+def test_read_audio_segment_over_plain_http():
+    """A `http://` URL reaches the same ffmpeg path and decodes identically."""
+    http_url = WAV_URL.replace("https://", "http://", 1)
+    segment, sr = read_audio(http_url, start_time=1.0, end_time=1.5)
+    expected, _ = read_audio(WAV_URL, start_time=1.0, end_time=1.5)
+
+    assert sr == WAV_SR
+    np.testing.assert_array_equal(segment, expected)
+
+
+@requires_ffmpeg
+def test_read_audio_segment_passes_url_verbatim_and_unauthenticated(monkeypatch):
+    """ffmpeg gets the URL as given, with no GCS rewriting and no bearer token.
+
+    An arbitrary HTTP(S) endpoint must never be sent GCS credentials, and the
+    URL must not be run through the `gs://` REST-URL conversion.
+    """
+    commands = []
+    real_run = read_utils.subprocess.run
+
+    def spy(cmd, **kwargs):
+        commands.append(cmd)
+        return real_run(cmd, **kwargs)
+
+    monkeypatch.setattr(read_utils.subprocess, "run", spy)
+
+    read_audio(WAV_URL, start_time=0.0, end_time=0.1)
+
+    assert [cmd[0] for cmd in commands] == ["ffprobe", "ffmpeg"]
+    for cmd in commands:
+        assert WAV_URL in cmd
+        assert "-headers" not in cmd
+        assert not any("storage.googleapis.com" in arg for arg in cmd)
+        assert not any("Authorization" in arg for arg in cmd)

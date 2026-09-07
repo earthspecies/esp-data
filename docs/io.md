@@ -340,6 +340,12 @@ with fs.open("https://pub-xxxxxxxx.r2.dev/test/split.jsonl", "rb") as f:
     - **Prefer `https://` over `http://`.** Plain HTTP gives no integrity guarantee
       for the data you fetch.
 
+Reads themselves are well supported, including partial ones. The endpoint's range
+requests back `seek()`, and a time-range `read_audio` streams just the segment it
+needs via `ffmpeg` rather than downloading the whole file (see
+[Read only a time range](#read-only-a-time-range)). No credentials are ever
+attached to an HTTP(S) URL, so the `anonymous` argument does not apply to it.
+
 ### File operations with filesystem
 
 #### Check if files exist
@@ -467,7 +473,7 @@ audio, sample_rate = read_audio(
 ```
 
 !!! tip
-    For GCS paths, a time-range read streams just the requested segment via `ffmpeg` instead of downloading the whole file — much faster for large files. Having the `ffmpeg` and `ffprobe` binaries installed is therefore recommended. Without them, `read_audio` falls back to downloading the full file and still works.
+    For GCS paths and `http(s)://` URLs, a time-range read streams just the requested segment via `ffmpeg` range requests instead of downloading the whole file — much faster for large files. Having the `ffmpeg` and `ffprobe` binaries installed is therefore recommended. Without them, `read_audio` falls back to downloading the full file and still works.
 
     Install ffmpeg:
 
