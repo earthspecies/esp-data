@@ -116,12 +116,16 @@ def test_read_text_over_plain_http(jsonl_text):
     assert read_text(http_url) == jsonl_text
 
 
-def test_read_text_ignores_query_string(jsonl_text):
-    """A query string is sent to the server but kept out of the parsed filename."""
+def test_read_text_with_a_query_string(jsonl_text):
+    """A query string is passed through to the server and still reads the object.
+
+    It also stays part of `name`/`suffix`, which `PureHTTPSPath` documents: the
+    URL is treated as a plain path.
+    """
     url = f"{JSONL_URL}?cachebust=1"
     path = anypath(url)
-    assert path.name == JSONL_NAME
-    assert path.suffix == ".jsonl"
+    assert path.name == f"{JSONL_NAME}?cachebust=1"
+    assert path.suffix == ".jsonl?cachebust=1"
     assert read_text(url) == jsonl_text
 
 

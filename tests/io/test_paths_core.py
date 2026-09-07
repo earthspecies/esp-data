@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 
 from alp_data.io import PureGSPath, PureHTTPPath, PureHTTPSPath, PureR2Path, PureS3Path, anypath
-from alp_data.io.paths import PureCloudPath, _PureURLPath
+from alp_data.io.paths import PureCloudPath
 
 
 class TestPureCloudPathBase:
@@ -229,49 +229,20 @@ class TestPureHTTPPath:
 
 
 class TestURLQueryStrings:
-    """Query strings and fragments are not part of the filename for URL paths."""
+    """A query string is part of the final path component, as documented."""
 
     @pytest.mark.parametrize("cls", [PureHTTPSPath, PureHTTPPath])
-    def test_query_string_is_preserved_in_str(self, cls):
-        """The stored URL keeps its query string so the right object is fetched."""
-        url = f"{cls.cloud_prefix}h/b/train.jsonl?X-Amz-Signature=abc123"
-        assert str(cls(url)) == url
+    def test_query_string_counts_as_part_of_the_name(self, cls):
+        """URL paths get no special handling, so `suffix` carries the query too.
 
-    @pytest.mark.parametrize("cls", [PureHTTPSPath, PureHTTPPath])
-    def test_query_string_excluded_from_name_suffix_stem(self, cls):
-        """A dot-free query must not be tacked onto the real extension."""
-        path = cls(f"{cls.cloud_prefix}h/b/train.jsonl?X-Amz-Signature=abc123")
-        assert path.name == "train.jsonl"
-        assert path.suffix == ".jsonl"
-        assert path.suffixes == [".jsonl"]
-        assert path.stem == "train"
-
-    @pytest.mark.parametrize("cls", [PureHTTPSPath, PureHTTPPath])
-    def test_fragment_excluded_from_suffix(self, cls):
-        path = cls(f"{cls.cloud_prefix}h/b/train.jsonl#section")
-        assert path.name == "train.jsonl"
-        assert path.suffix == ".jsonl"
-
-    @pytest.mark.parametrize("cls", [PureHTTPSPath, PureHTTPPath])
-    def test_dot_in_query_does_not_invent_a_suffix(self, cls):
-        """A dot inside the query must not shadow the real extension."""
-        path = cls(f"{cls.cloud_prefix}h/b/clip.wav?start=0.5")
-        assert path.suffix == ".wav"
-        assert path.stem == "clip"
-
-    @pytest.mark.parametrize("cls", [PureHTTPSPath, PureHTTPPath])
-    def test_dot_in_query_alone_gives_no_suffix(self, cls):
-        """An extension-less object must not inherit a suffix from its query."""
-        path = cls(f"{cls.cloud_prefix}h/b/manifest?src=train.jsonl")
-        assert path.name == "manifest"
-        assert path.suffix == ""
-
-    @pytest.mark.parametrize("cls", [PureHTTPSPath, PureHTTPPath])
-    def test_slash_in_query_does_not_split_the_name(self, cls):
-        """A literal "/" in the query must not become a path component of `name`."""
-        path = cls(f"{cls.cloud_prefix}h/b/f.wav?p=a/b")
-        assert path.name == "f.wav"
-        assert path.suffix == ".wav"
+        `PureHTTPSPath` documents this: code branching on `suffix` will not
+        recognise a signed URL. Pinned here so the docs and the behaviour do not
+        drift apart.
+        """
+        path = cls(f"{cls.cloud_prefix}h/b/train.jsonl?X-Amz-Signature=abc")
+        assert str(path) == f"{cls.cloud_prefix}h/b/train.jsonl?X-Amz-Signature=abc"
+        assert path.name == "train.jsonl?X-Amz-Signature=abc"
+        assert path.suffix == ".jsonl?X-Amz-Signature=abc"
 
     @pytest.mark.parametrize("cls", [PureHTTPSPath, PureHTTPPath])
     def test_host_only_url_has_no_name(self, cls):
@@ -283,11 +254,6 @@ class TestURLQueryStrings:
         path = PureGSPath("gs://bucket/train.jsonl?weird=1")
         assert path.name == "train.jsonl?weird=1"
         assert path.suffix == ".jsonl?weird=1"
-
-    def test_url_base_class_requires_a_cloud_prefix(self):
-        """The shared URL base is internal and cannot be instantiated."""
-        with pytest.raises(ValueError, match="cloud_prefix must be defined in subclass"):
-            _PureURLPath("https://example.com")
 
 
 class TestCrossSchemeValidation:
