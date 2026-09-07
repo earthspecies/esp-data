@@ -273,9 +273,21 @@ def test_windowed_read_on_long_recording():
     assert item["audio"].dtype == np.float32
 
 
-def test_shot_end_times_are_derived_not_stored(ds_all: FASD13):
+def _shot_end_times(ds: FASD13, idx: int, n_shots: int = 5) -> list[float]:
+    """Derive shot boundaries the way a client is expected to.
+
+    Mirrors the recipe in the class docstring: the dataset deliberately does
+    not expose this, so the test derives it from the selection table the same
+    way a consumer would.
     """
-    Shot boundaries are computed from the selection table, never stored.
+    st = pd.read_csv(StringIO(ds._data[idx]["selection_table"]), sep="\t")
+    known = st[st["Q"] != "UNK"]
+    return [float(t) for t in sorted(known["End Time (s)"])[:n_shots]]
+
+
+def test_shot_boundaries_are_not_stored(ds_all: FASD13):
+    """
+    Shot boundaries must be derivable, never stored.
 
     A stored copy goes stale under windowed reads, where table times are
     re-based but a manifest column would not be -- the two would end up in
@@ -285,27 +297,27 @@ def test_shot_end_times_are_derived_not_stored(ds_all: FASD13):
     assert "shot_end_times" not in rows.columns
     assert "n_shots_available" not in rows.columns
 
-    ends = ds_all.shot_end_times(0)
+    ends = _shot_end_times(ds_all, 0)
     assert 1 <= len(ends) <= 5
     assert ends == sorted(ends), "shot end times should be ascending"
 
 
-def test_shot_end_times_exclude_unk(ds_all: FASD13):
+def test_shot_boundaries_exclude_unk():
     """UNK events must not be usable as shots, per the protocol."""
     ms = FASD13(split="MS", backend="pandas")          # 632 UNK events
     st = pd.read_csv(StringIO(ms._data[0]["selection_table"]), sep="\t")
     pos_ends = sorted(float(t) for t in st[st["Q"] == "POS"]["End Time (s)"])
-    assert ms.shot_end_times(0) == pos_ends[:5]
+    assert _shot_end_times(ms, 0) == pos_ends[:5]
 
     unk_ends = {float(t) for t in st[st["Q"] == "UNK"]["End Time (s)"]}
-    assert not (set(ms.shot_end_times(0)) & unk_ends), "an UNK event was used as a shot"
+    assert not (set(_shot_end_times(ms, 0)) & unk_ends), "an UNK event was used as a shot"
 
 
-def test_shot_end_times_stay_absolute_under_windowing(ds: FASD13):
-    """Boundaries must not drift when the caller reads a window."""
-    before = ds.shot_end_times(0)
+def test_shot_boundaries_stay_absolute_under_windowing(ds: FASD13):
+    """Deriving from the row must not be perturbed by a windowed read."""
+    before = _shot_end_times(ds, 0)
     _windowed(ds, 0, 5.0, 15.0)
-    assert ds.shot_end_times(0) == before
+    assert _shot_end_times(ds, 0) == before
 
 
 def test_per_row_licensing(ds_all: FASD13):

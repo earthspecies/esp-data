@@ -19,15 +19,31 @@ Licensing is per sub-dataset (CC-BY-1.0 / 4.0, CC-BY-SA-4.0, CC-BY-NC-4.0,
 CC-BY-NC-SA-4.0, public domain, and one custom citation-required entry for MS),
 so it is carried as a per-row column rather than a single dataset-level string.
 
-Stages (run in order by ``fasd13_build_job.sh`` on Slurm CPU):
+Stages, run in order. Sized for a CPU node: the download is ~16 GB, the
+extracted originals ~21 GB, and resampling is streamed so memory stays flat
+regardless of recording length (HG is 8 h of stereo per file)::
 
-1. ``download`` -- fetch the 15 Zenodo files, verify md5, unzip.
-2. ``resample`` -- 16 kHz + 32 kHz mono mirrors of every recording +
-   ``durations.csv`` (duration, native rate, channels).
-3. ``manifests`` -- parse the CSVs into WABAD-shaped per-file selection tables,
-   emit one manifest CSV per sub-dataset plus ``fasd13_all.csv``.
-4. ``support`` -- materialise the deterministic few-shot support clips
-   (``MAX_SHOTS`` per recording, 10 s each, at both rates) + ``fasd13_support.csv``.
+    STAGE=<scratch>            # ~110 GB free
+    DEST=gs://<bucket>/fasd13/v0.1.0
+
+    # 1. fetch the 15 Zenodo files, verify md5, unzip
+    python fasd13.py download  --stage-dir "$STAGE/zenodo" --work "$STAGE/work"
+
+    # 2. 16 kHz + 32 kHz mono mirrors + durations.csv (duration, rate, channels)
+    python fasd13.py resample   --root "$STAGE/work" --out-root "$STAGE/mirrors" --workers 16
+
+    # 3. per-file selection tables -> one manifest per sub-dataset + fasd13_all.csv
+    python fasd13.py manifests  --root "$STAGE/work" \
+        --durations-csv "$STAGE/mirrors/durations.csv" --out-dir "$STAGE/manifests"
+
+    # 4. deterministic few-shot support clips (5 per recording, 10 s, both rates)
+    python fasd13.py support    --root "$STAGE/work" --mirrors "$STAGE/mirrors" \
+        --out-root "$STAGE/mirrors" --manifest-dir "$STAGE/manifests" --workers 16
+
+Then upload the originals, both mirrors, the support clips and the manifests to
+``$DEST``, keeping the tree layout-preserving: manifests carry audio paths
+relative to their own directory, so they must sit alongside ``audio_native/``,
+``audio_16k/`` and ``audio_32k/``.
 
 The N-shot protocol follows ``drasdic/data/test.py`` of the (private)
 earthspecies/drasdic repo: events are ordered by end time, ``UNK`` events are

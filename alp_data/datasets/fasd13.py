@@ -18,10 +18,6 @@ from alp_data.io import AnyPathT, anypath, audio_stereo_to_mono, read_audio
 # from this one constant.
 _RAW_ROOT = "gs://esp-data-ingestion/fasd13/v0.1.0"
 
-# The benchmark ships five pre-cut support clips per recording, so five is the
-# largest episode the published support set can serve.
-MAX_SHOTS = 5
-
 # Sub-dataset codes, in the order of the FASD13 summary table.
 SUBDATASET_CODES = (
     "AS",
@@ -114,12 +110,19 @@ class FASD13(Dataset):
     audio up through the end of the Nth event, and must detect events in the
     remainder, which is the only region scored.
 
-    Use `shot_end_times` to get those boundaries. They are derived from the
-    selection table on demand rather than stored, so they cannot fall out of
-    step with it, and they are always recording-absolute -- including when the
-    audio you hold is a window. When chunking a recording into query windows,
-    take the support region once from the start of the file and reuse it for
-    every window; deriving it per window would draw support from query audio.
+    The boundaries are not stored on the row -- a stored copy goes stale under
+    windowed reads, where table times are re-based but a column would not be.
+    Derive them from the selection table instead, which is three lines:
+
+        st = pd.read_csv(StringIO(row["selection_table"]), sep="\t")
+        known = st[st["Q"] != "UNK"]
+        shot_ends = sorted(known["End Time (s)"])[:n]     # recording-absolute
+
+    `shot_ends[n - 1]` ends the support region for an n-shot episode;
+    everything after it is query. Derive this from an **unwindowed** row so the
+    times stay recording-absolute, and when splitting a recording into several
+    query windows take it once and reuse it -- deriving it per window would
+    draw support from query audio.
 
     Windowed reads
     --------------
@@ -451,38 +454,6 @@ class FASD13(Dataset):
             return ds, meta
 
         return ds, {}
-
-    def shot_end_times(self, idx: int, n_shots: int = MAX_SHOTS) -> list[float]:
-        """Return the end times of the first `n_shots` non-`UNK` events.
-
-        Derived from the recording's selection table on each call rather than
-        stored on the row, so it cannot fall out of step with the annotations.
-        Times are always **recording-absolute**, including for a row that is
-        read as a window -- the returned audio may start partway through the
-        recording, but these boundaries do not move with it.
-
-        `shot_end_times(idx)[n - 1]` is the end of the support region for an
-        n-shot episode: everything after it is query. When splitting a
-        recording into several query windows, take this once and reuse it, so
-        that every window is scored against support drawn from the start of the
-        file.
-
-        Parameters
-        ----------
-        idx : int
-            Index of the recording.
-        n_shots : int
-            Maximum number of shots to return.
-
-        Returns
-        -------
-        list[float]
-            Ascending, recording-absolute end times; shorter than `n_shots`
-            if the recording has fewer usable events.
-        """
-        st = pd.read_csv(StringIO(self._data[idx]["selection_table"]), sep="\t")
-        known = st[st["Q"] != "UNK"]
-        return [float(t) for t in sorted(known["End Time (s)"])[:n_shots]]
 
     def get_available_labels(self, anno_column: str | None = "Q") -> list[str]:
         """Return the event-status vocabulary of the selection tables.
