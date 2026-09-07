@@ -83,6 +83,9 @@ python_files = [
     "test_*.py",
     "check_*.py",
 ]
+markers = [
+    "network: test reads from a live remote endpoint; skipped when unreachable",
+]
 
 [tool.ruff]
 line-length = 100
