@@ -1,11 +1,12 @@
 [project]
 name = "alp-data"
-version = "1.9.0"
+version = "1.11.1"
 description = "Data tools for ESP projects"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
     "gcsfs>=2024.9.0.post1",
+    "google-auth>=2.0.0",
     "google-cloud-secret-manager>=2.23.1",
     "google-cloud-storage>=2.19.0",
     "intervaltree>=3.1.0",
@@ -35,6 +36,7 @@ dev = [
     "pytest>=7.1.2",
     "ruff>=0.15.10",
     "deptry>=0.23.0",
+    "mkdocs-jupyter>=0.26.3",
 ]
 
 [build-system]
@@ -126,7 +128,7 @@ allow-star-arg-any = true # suppress ANN401 for *args and **kwargs arguments
 skip = "*.csv, *.ipynb"
 
 [tool.deptry]
-exclude = ["conftest.py", ".venv", "tests", "scripts", "docs/hooks/.*"]
+exclude = ["conftest.py", ".venv", "tests", "scripts", "notebooks", "_hooks/.*", "docs/tutorials/.*"]
 ignore = ["DEP003"]
 
 [tool.deptry.per_rule_ignores]

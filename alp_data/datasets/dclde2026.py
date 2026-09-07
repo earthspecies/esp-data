@@ -61,6 +61,8 @@ PROVENANCE_COLUMNS = [
     "provider",
 ]
 
+_DCLDE_DATA_ROOT = f"{DATA_HOME}/dclde2026/v0.1.0/raw/2026/dclde_2026_killer_whales"
+
 
 @register_dataset
 class DCLDE2026(Dataset):
@@ -70,7 +72,7 @@ class DCLDE2026(Dataset):
     -----------
     Multi-provider annotated acoustic recordings of killer whales, humpback
     whales, and bowhead whales from Alaska, British Columbia, and Washington
-    (2011–2024). Each entry is an audio file plus an enriched selection table
+    (2011-2024). Each entry is an audio file plus an enriched selection table
     containing detection/call-level annotations with species, ecotype, call
     type, pod, clan, and acoustic behavior labels — all human-annotated.
 
@@ -93,6 +95,8 @@ class DCLDE2026(Dataset):
     Splits
     ---------
     - "all": All data (default)
+    - "vfpa_srkw_standard": VFPA SRKW standard S-call segments used for
+      vocal repertoire classification
 
     Available tasks
     ---------------
@@ -150,15 +154,15 @@ class DCLDE2026(Dataset):
 
     References
     ----------
-    Palmer et al. (2025) doi:10.1038/s41597-025-05281-5
-    License: CC-BY-4.0
+    Palmer et al. (2025) [Nature scientific data](https://doi.org/10.1038/s41597-025-05281-5)
     """
 
     info = DatasetInfo(
         name="dclde2026",
         owner="david",
         split_paths={
-            "all": f"{DATA_HOME}/dclde2026/v0.1.0/raw/2026/dclde_2026_killer_whales/processed_enriched_v2.csv",  # noqa: E501
+            "all": f"{_DCLDE_DATA_ROOT}/processed_enriched_v2.csv",
+            "vfpa_srkw_standard": f"{_DCLDE_DATA_ROOT}/vfpa_srkw_standard.csv",
         },
         version="0.1.0",
         description="DCLDE 2026 killer whale dataset with species, ecotype, call type, "
@@ -200,7 +204,7 @@ class DCLDE2026(Dataset):
             CSV; otherwise audio is resampled on-the-fly.
         data_root : str | AnyPathT | None
             Root directory containing provider audio subdirectories.
-            If None, defaults to the parent directory of the split CSV path.
+            If None, defaults to the DCLDE 2026 data root.
         backend : BackendType
             The backend to use ("pandas" or "polars"), by default "polars".
         streaming : bool
@@ -223,7 +227,7 @@ class DCLDE2026(Dataset):
         self._load()
 
         if self.data_root is None:
-            self.data_root = anypath(self.info.split_paths[self.split]).parent
+            self.data_root = anypath(_DCLDE_DATA_ROOT)
 
     @property
     def columns(self) -> list[str]:
