@@ -46,7 +46,8 @@ def filesystem(
       returns an empty list **without raising**. Prefer an explicit manifest of
       URLs over discovering files by glob.
     - Reads are the supported operation. `alp_data.io.rm` rejects HTTP(S) paths,
-      and `alp_data.io.exists` costs a GET rather than a metadata lookup.
+      and `alp_data.io.exists` goes through `info()` (a HEAD) rather than
+      `HTTPFileSystem.exists` (a GET).
 
     For the 'r2' protocol, it automatically retrieves the necessary credentials
     (access key ID, secret access key, endpoint URL) from GCP Secret Manager.

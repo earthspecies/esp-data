@@ -332,8 +332,12 @@ with fs.open("https://pub-xxxxxxxx.r2.dev/test/split.jsonl", "rb") as f:
 
         Drive HTTP(S) reads from an explicit list of URLs rather than discovering
         files by glob.
-    - **`exists()` costs a GET, not a HEAD.** `HTTPFileSystem` treats any status
-      below 400 as "exists", so avoid calling it in a loop over many URLs.
+    - **Existence checks are not free.** `HTTPFileSystem.exists` GETs the URL and
+      calls any status under 400 "exists", so `alp_data.io.exists` uses `info()`
+      instead: a HEAD, with no body transferred, and a 404 reported as False while
+      a 403, a 500 or an unreachable host raises rather than passing for "absent".
+      An object that is there costs one HEAD; an absent one costs two requests,
+      because `info()` retries with a GET before giving up.
     - **Redirects are followed across hosts**, including an `https://` &rarr;
       `http://` downgrade, so a `PureHTTPSPath` does not by itself guarantee the
       bytes arrived over TLS.

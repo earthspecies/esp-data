@@ -4,7 +4,7 @@ The rest of the HTTP(S) tests are offline: they assert on `example.com` URLs and
 never issue a request. These tests exercise the same pathlib and filesystem
 extensions against a real object-storage endpoint, which is the case they were
 added for, and pin down the behaviours documented in `alp_data.io.filesystem`
-and `docs/io.md` (no listing API, range reads, GET-based `exists`).
+and `docs/io.md` (no listing API, range reads, HEAD-based `exists`).
 
 The last group covers `read_audio` over HTTP(S): a time-range read streams the
 segment with ffmpeg range requests instead of downloading the whole file, the
@@ -151,7 +151,11 @@ def test_seek_reads_from_the_middle_of_the_object(jsonl_text):
 
 
 def test_exists_distinguishes_present_and_missing_objects():
-    """A missing key answers 404, which `exists` reports as False."""
+    """A missing key answers 404, which `exists` reports as False.
+
+    The request pattern behind this — a HEAD, and a GET only when the object is
+    absent — is pinned offline in `tests/io/test_paths.py`.
+    """
     assert exists(JSONL_URL) is True
     assert exists(MISSING_URL) is False
 
