@@ -2,7 +2,7 @@
 
 ## What does it do?
 
-The `io` module provides a set of functions for reading and writing data to and from various file formats and storage systems. It supports local files, Google Cloud Storage (GCS), Cloudflare R2 buckets, and plain HTTP(S) endpoints (such as a Cloudflare R2 public bucket, which needs no credentials).
+The `io` module provides a set of functions for reading and writing data to and from various file formats and storage systems. It supports local files, Google Cloud Storage (GCS), Cloudflare R2 buckets, and public HTTP(S) URLs, which need no credentials.
 
 !!! warning
     We have dropped support for `cloudpathlib` which was the basis for `anypath` until version 1.2.1. We now have our own implementation of a "cloud path" (e.g. "gs://my-bucket/file.txt"). This implementation `PureGSPath` or `PureS3Path` is more lightweight and provides **path manipulation features only**. For file operations on cloud paths (reading, writing, copying, listing files), you must use the `filesystem` interface.
@@ -301,54 +301,32 @@ fs = filesystem_from_path("gs://esp-ci-cd-tests")
 
 ### HTTP(S) endpoints
 
-Passing `"http"` or `"https"` to `filesystem()` (or an `http(s)://` URL to
-`filesystem_from_path()`) returns an `fsspec` `HTTPFileSystem`. This lets you read
-from a public bucket — for example a Cloudflare R2 `*.r2.dev` domain — without any
-credentials.
+Some datasets live behind a plain URL rather than a bucket you hold keys for: a public Cloudflare R2 bucket (`https://pub-xxxxxxxx.r2.dev/...`), a lab web server, an archive download. Hand such a URL to `filesystem_from_path()` (or `"http"`/`"https"` to `filesystem()`) and you get a filesystem you can read from, with no credentials and no setup.
 
 ```python
-fs = filesystem_from_path("https://pub-xxxxxxxx.r2.dev/test/split.jsonl")
+url = "https://pub-xxxxxxxx.r2.dev/test/split.jsonl"
 
-with fs.open("https://pub-xxxxxxxx.r2.dev/test/split.jsonl", "rb") as f:
+fs = filesystem_from_path(url)
+with fs.open(url, "rb") as f:
     content = f.read()
 ```
 
-!!! warning "HTTP(S) is read-only and cannot list or glob on a public bucket"
-    An `HTTPFileSystem` looks like the bucket backends but behaves differently, because
-    plain HTTP has no listing API:
+Reading is the part that works well, and it only fetches what you ask for: `seek()` jumps to an offset without pulling the whole file down first, and a time-range `read_audio` downloads just that segment of a recording (see [Read only a time range](#read-only-a-time-range)). Credentials are never sent to a URL, so the `anonymous` argument does not apply here.
 
-    - **Read-only.** `alp_data.io.rm` raises `NotImplementedError` for `http(s)://`
-      paths. Writing is not supported either.
-    - **Listing and globbing need an HTML index.** `fsspec` emulates a listing by
-      fetching the URL and scraping `<a href=...>` links out of the response when it
-      is HTML. That works against a directory-index server, but an R2 public bucket
-      serves no index document, so `ls()` raises `FileNotFoundError` and — the trap —
-      `glob()` returns `[]` **without raising**:
+!!! warning "A URL is not a bucket"
+    A web server can hand you a file, but it cannot do the other things a bucket does:
+
+    - **You can read, but not write or delete.** `alp_data.io.rm()` refuses `http(s)://` paths, and writing is not supported.
+    - **You cannot browse or search.** A public R2 bucket publishes no index of its contents, so `fs.ls()` raises `FileNotFoundError` and — the one to watch out for — `fs.glob()` quietly returns an empty list instead of complaining:
 
         ```python
-        fs.ls("https://pub-xxxxxxxx.r2.dev/test/")          # FileNotFoundError
+        fs.ls("https://pub-xxxxxxxx.r2.dev/test/")           # FileNotFoundError
         fs.glob("https://pub-xxxxxxxx.r2.dev/test/*.jsonl")  # [] - no error!
         ```
 
-        Drive HTTP(S) reads from an explicit list of URLs rather than discovering
-        files by glob.
-    - **Existence checks are not free.** `HTTPFileSystem.exists` GETs the URL and
-      calls any status under 400 "exists", so `alp_data.io.exists` uses `info()`
-      instead: a HEAD, with no body transferred, and a 404 reported as False while
-      a 403, a 500 or an unreachable host raises rather than passing for "absent".
-      An object that is there costs one HEAD; an absent one costs two requests,
-      because `info()` retries with a GET before giving up.
-    - **Redirects are followed across hosts**, including an `https://` &rarr;
-      `http://` downgrade, so a `PureHTTPSPath` does not by itself guarantee the
-      bytes arrived over TLS.
-    - **Prefer `https://` over `http://`.** Plain HTTP gives no integrity guarantee
-      for the data you fetch.
-
-Reads themselves are well supported, including partial ones. The endpoint's range
-requests back `seek()`, and a time-range `read_audio` streams just the segment it
-needs via `ffmpeg` rather than downloading the whole file (see
-[Read only a time range](#read-only-a-time-range)). No credentials are ever
-attached to an HTTP(S) URL, so the `anonymous` argument does not apply to it.
+        Work from a list of the URLs you need — a manifest file, say — rather than discovering files with a glob pattern.
+    - **`alp_data.io.exists()` asks the server every time.** It requests the file's metadata rather than the file itself, so it is quick, but it is still a round trip: avoid it in a loop over thousands of URLs. A file that is not there gives you `False`, while a server that refuses the request or cannot be reached raises an error — so a typo in the hostname or an outage never quietly reads as "the file is missing".
+    - **Prefer `https://` to `http://`.** Plain HTTP gives no guarantee that what arrives is what was sent. Redirects are also followed wherever they lead, so even an `https://` URL can end up served over plain HTTP.
 
 ### File operations with filesystem
 
@@ -477,7 +455,7 @@ audio, sample_rate = read_audio(
 ```
 
 !!! tip
-    For GCS paths and `http(s)://` URLs, a time-range read streams just the requested segment via `ffmpeg` range requests instead of downloading the whole file — much faster for large files. Having the `ffmpeg` and `ffprobe` binaries installed is therefore recommended. Without them, `read_audio` falls back to downloading the full file and still works.
+    For GCS paths and `http(s)://` URLs, a time-range read fetches just the requested segment with `ffmpeg` instead of downloading the whole file — much faster for large recordings. Having the `ffmpeg` and `ffprobe` binaries installed is therefore recommended. Without them, `read_audio` falls back to downloading the full file and still works.
 
     Install ffmpeg:
 
